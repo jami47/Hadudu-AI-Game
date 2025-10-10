@@ -45,7 +45,7 @@ func _process(delta: float) -> void:
 	var players := _get_players()
 	for p in players:
 		p.regen(delta)
-		_clamp_to_field(p)
+		_clamp_to_field_with_restrictions(p)
 
 	# Check if we need to alert defenders (attacker got close to any defender)
 	if not _defenders_alerted:
@@ -134,8 +134,6 @@ func _ensure_ui() -> void:
 
 func _on_start_round_pressed() -> void:
 	print("[Game] Start Round pressed")
-	_round += 1
-	print("[Game] Round %d starting: spawning players..." % _round)
 	_running = false
 	_turn = 0
 	_rng.randomize()
@@ -332,26 +330,31 @@ func _clamp_to_field_with_restrictions(p: Node2D) -> void:
 	pos.x = clamp(pos.x, r.position.x, r.position.x + r.size.x)
 	pos.y = clamp(pos.y, r.position.y, r.position.y + r.size.y)
 	
-	# Enforce court restrictions for defenders
+	# Enforce court restrictions during active rounds
 	if _game_state == GameState.ROUND_ACTIVE:
-		var attacker := _get_attacker(_get_players())
-		var is_attacker := (attacker != null and p == attacker)
+		var is_attacker : bool = (p.team == _attacking_team and p.player_id == _attacker_index) as bool #changed to bool
 		
-		if not is_attacker:  # This is a defender
-			# Defenders must stay in their own court
-			if p.team == _defending_team:
-				if _defending_team == 0:  # Team 0 defends left side
-					pos.x = clamp(pos.x, r.position.x, center_x)
-				else:  # Team 1 defends right side  
-					pos.x = clamp(pos.x, center_x, r.position.x + r.size.x)
+		if not is_attacker:  # This is a defender or non-attacking player
+			# All non-attackers must stay in their own court
+			if p.team == 0:  # Team 0 stays on left side
+				pos.x = clamp(pos.x, r.position.x, center_x)
+			else:  # Team 1 stays on right side  
+				pos.x = clamp(pos.x, center_x, r.position.x + r.size.x)
 	
 	p.global_position = pos
 
 func _start_new_round() -> void:
+	_round += 1  # Increment round counter for new rounds after points
 	_game_state = GameState.ROUND_ACTIVE
 	_turn = 0
 	_defenders_alerted = false
 	_attacker_index = _rng.randi() % players_per_team  # Random attacker from attacking team
+	
+	# Respawn all players in new random positions
+	_clear_players()
+	_spawn_players()
+	_build_hud_bars()
+	
 	_running = true
 	print("[Game] Round %d started: Team %d attacking, Player %d is the attacker" % [_round, _attacking_team, _attacker_index + 1])
 	_update_hud()
@@ -371,7 +374,7 @@ func _check_for_defender_alert() -> void:
 			break
 
 func _process_ai_moves(state: Dictionary, players: Array) -> void:
-	# Process attacker move
+	# Process attacker move - only the designated attacker should move initially
 	var attacker := _get_attacker(players)
 	if attacker != null:
 		var attacker_move := AI.get_attacker_move(state, _attacking_team, _attacker_index, ai_depth, move_distance, _defenders_alerted)
@@ -383,14 +386,18 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 			_apply_player_move(attacker, forced_move)
 			print("[Game] Forced attacker movement to prevent standstill")
 	
-	# Process defender moves (only if alerted)
+	# Process defender moves (only if alerted and only defending team players)
 	if _defenders_alerted:
 		var defenders := _get_defenders(players)
 		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
 		for defender in defenders:
-			# Each defender gets their own AI move towards the attacker
-			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
-			_apply_player_move(defender, defender_move)
+			# Only move defenders from the defending team
+			if defender.team == _defending_team:
+				var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
+				_apply_player_move(defender, defender_move)
+	
+	# All other players (non-attacking team members and non-designated attacker) should not move
+	# They'll stay in place due to the restriction system
 
 func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 	if move.has("delta") and move["delta"] != Vector2.ZERO:
