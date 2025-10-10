@@ -2,14 +2,14 @@ extends Node2D
 
 @export var players_per_team: int = 5
 @export var move_distance: float = 8.0
-@export var ai_depth: int = 3
-@export var close_range_threshold: float = 25.0  # Distance for "very close" range
-@export var catch_distance: float = 15.0  # Distance for catching the attacker
+@export var ai_depth: int = 2
+@export var close_range_threshold: float = 35.0  # Distance for "very close" range (increased)
+@export var catch_distance: float = 12.0  # Distance for catching the attacker (decreased)
 
 @export var energy_min: float = 60.0
 @export var energy_max: float = 100.0
-@export var speed_min: float = 90.0
-@export var speed_max: float = 160.0
+@export var speed_min: float = 100.0
+@export var speed_max: float = 140.0
 
 @export var field_rect: Rect2 = Rect2(200, 140, 1200, 640) # x,y,w,h
 
@@ -17,6 +17,7 @@ var _rng := RandomNumberGenerator.new()
 var _running := false
 var _round := 0
 var _turn := 0
+var _frame_counter := 0  # For processing every few frames
 
 # Game state variables
 enum GameState { WAITING, ROUND_ACTIVE, POINT_SCORED }
@@ -41,25 +42,31 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not _running or _game_state != GameState.ROUND_ACTIVE:
 		return
-		
+	
+	# Always update player energy and positions
 	var players := _get_players()
 	for p in players:
 		p.regen(delta)
 		_clamp_to_field_with_restrictions(p)
-
-	# Check if we need to alert defenders (attacker got close to any defender)
-	if not _defenders_alerted:
-		_check_for_defender_alert()
 	
-	# Get AI moves for all players
-	var state := _collect_state()
-	_process_ai_moves(state, players)
-	
-	# Check win conditions
-	_check_round_end_conditions()
-	
-	_turn += 1
-	_update_hud()
+	# Process AI moves every 3 frames for smoother movement
+	_frame_counter += 1
+	if _frame_counter >= 3:
+		_frame_counter = 0
+		
+		# Check if we need to alert defenders (attacker got close to any defender)
+		if not _defenders_alerted:
+			_check_for_defender_alert()
+		
+		# Get AI moves for all players
+		var state := _collect_state()
+		_process_ai_moves(state, players)
+		
+		# Check win conditions
+		_check_round_end_conditions()
+		
+		_turn += 1
+		_update_hud()
 
 func _ensure_ui() -> void:
 	var ui = get_node_or_null("UI")
@@ -391,10 +398,15 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 		var defenders := _get_defenders(players)
 		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
 		for defender in defenders:
-			# Only move defenders from the defending team
-			if defender.team == _defending_team:
-				var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
+			# All defenders from defending team should move towards attacker
+			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
+			if defender_move.has("delta") and defender_move["delta"] != Vector2.ZERO:
 				_apply_player_move(defender, defender_move)
+			else:
+				# Force defender to move towards attacker if AI returns zero
+				var direction_to_attacker :Vector2 = (attacker_pos - defender.global_position).normalized()
+				var forced_move := {"delta": direction_to_attacker * move_distance}
+				_apply_player_move(defender, forced_move)
 	
 	# All other players (non-attacking team members and non-designated attacker) should not move
 	# They'll stay in place due to the restriction system
@@ -406,11 +418,24 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 		var energy_ratio: float = float(player.energy) / max(float(player.max_energy), 1.0)
 		
 		# Calculate maximum allowed displacement based on player's actual speed
-		var max_displacement: float = speedf * 0.05  # Scale factor to control speed
-		var desired_displacement: Vector2 = delta_vec.normalized() * max_displacement
+		var base_scale: float = 0.12  # Smoother movement scale
+		
+		# Give attacker a speed boost when defenders are alerted (escape mode)
+		var is_attacker: bool = (player.team == _attacking_team and player.player_id == _attacker_index)
+		if is_attacker and _defenders_alerted:
+			base_scale *= 1.4  # Increased escape boost
+		
+		var max_displacement: float = speedf * base_scale
+		
+		# Smooth out movement by ensuring minimum displacement
+		var desired_displacement: Vector2
+		if delta_vec.length() > 0.1:  # Only move if significant direction
+			desired_displacement = delta_vec.normalized() * max_displacement
+		else:
+			desired_displacement = Vector2.ZERO
 		
 		# Apply energy penalty to the displacement
-		var final_displacement: Vector2 = desired_displacement * clamp(energy_ratio, 0.25, 1.0)
+		var final_displacement: Vector2 = desired_displacement * clamp(energy_ratio, 0.3, 1.0)
 		
 		player.apply_move(final_displacement)
 		_clamp_to_field_with_restrictions(player)

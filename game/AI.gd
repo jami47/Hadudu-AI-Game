@@ -147,43 +147,97 @@ static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: 
 	var field_center_x: float = state.get("field_center_x", 700.0)
 	
 	if not defenders_alerted:
-		# Find closest defender to target
+		# AGGRESSIVE DEFENDER SEEKING - Must engage defenders, not avoid them
+		var all_defenders: Array = []
 		var closest_defender_pos: Vector2 = Vector2.ZERO
 		var min_distance := INF
+		
+		# Collect all defender positions
 		for player in state["players"]:
 			if int(player.get("team", 0)) != team:  # This is a defender
 				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
+				all_defenders.append(defender_pos)
 				var distance := attacker_pos.distance_to(defender_pos)
 				if distance < min_distance:
 					min_distance = distance
 					closest_defender_pos = defender_pos
 		
-		# Prioritize moves towards the closest defender
 		if closest_defender_pos != Vector2.ZERO:
-			var direction_to_defender := (closest_defender_pos - attacker_pos).normalized()
+			# Prioritize moves that get closer to ANY defender
 			var scored_moves: Array = []
 			for direction in dirs:
-				var alignment_score := direction.normalized().dot(direction_to_defender)
-				scored_moves.append({"move": direction, "score": alignment_score})
+				var new_pos := attacker_pos + direction
+				var score := 0.0
+				
+				# Calculate how much closer this move gets us to the nearest defender
+				var best_distance_after := INF
+				for defender_pos in all_defenders:
+					var dist_after := new_pos.distance_to(defender_pos)
+					best_distance_after = min(best_distance_after, dist_after)
+				
+				# Heavy reward for moves that reduce distance to closest defender
+				score += (min_distance - best_distance_after) * 10.0
+				
+				# Direction alignment with closest defender
+				if direction.length() > 0:
+					var direction_to_closest := (closest_defender_pos - attacker_pos).normalized()
+					score += direction.normalized().dot(direction_to_closest) * 5.0
+				
+				scored_moves.append({"move": direction, "score": score})
 			
 			scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
 			for scored_move in scored_moves:
 				moves.append(scored_move["move"])
 		else:
-			# Fallback: just move towards opponent's court
+			# Fallback: move toward center of opponent court
+			var center_pos := Vector2(field_center_x + (50 if team == 0 else -50), 400)
+			var direction_to_center := (center_pos - attacker_pos).normalized()
+			var scored_moves: Array = []
 			for direction in dirs:
-				moves.append(direction)
+				var score := direction.normalized().dot(direction_to_center) if direction.length() > 0 else 0.0
+				scored_moves.append({"move": direction, "score": score})
+			scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
+			for scored_move in scored_moves:
+				moves.append(scored_move["move"])
 	else:
-		# Defenders are alerted: prioritize returning to own court
+		# Defenders are alerted: prioritize returning to own court while avoiding defenders
 		var direction_to_home: Vector2
 		if team == 0:  # Team 0 wants to go left (towards smaller x)
 			direction_to_home = Vector2(-1, 0)
 		else:  # Team 1 wants to go right (towards larger x) 
 			direction_to_home = Vector2(1, 0)
 		
+		# Find closest defender to avoid
+		var closest_defender_pos: Vector2 = Vector2.ZERO
+		var min_defender_distance := INF
+		for player in state["players"]:
+			if int(player.get("team", 0)) != team:  # This is a defender
+				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
+				var distance := attacker_pos.distance_to(defender_pos)
+				if distance < min_defender_distance:
+					min_defender_distance = distance
+					closest_defender_pos = defender_pos
+		
 		var scored_moves: Array = []
 		for direction in dirs:
 			var alignment_score := direction.normalized().dot(direction_to_home)
+			
+			# Strong bonus for moving away from ALL defenders
+			if closest_defender_pos != Vector2.ZERO:
+				var new_pos := attacker_pos + direction
+				var evasion_bonus := 0.0
+				
+				# Check distance from ALL defenders, not just closest
+				for player in state["players"]:
+					if int(player.get("team", 0)) != team:
+						var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
+						var current_dist := attacker_pos.distance_to(defender_pos)
+						var new_dist := new_pos.distance_to(defender_pos)
+						if new_dist > current_dist:
+							evasion_bonus += 0.3  # Bonus for moving away from each defender
+				
+				alignment_score += evasion_bonus
+			
 			scored_moves.append({"move": direction, "score": alignment_score})
 		
 		scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
@@ -246,7 +300,7 @@ static func _apply_defender_move(state: Dictionary, team: int, defender_id: int,
 		new_state["players"].append(p)
 	return new_state
 
-# Heuristic for attacker - wants to get close to defenders or return safely
+# Heuristic for attacker - MUST engage defenders before trying to return
 static func _attacker_heuristic(state: Dictionary, team: int, defenders_alerted: bool) -> float:
 	var players: Array = state["players"]
 	if players.is_empty():
@@ -254,53 +308,102 @@ static func _attacker_heuristic(state: Dictionary, team: int, defenders_alerted:
 	
 	var attacker: Dictionary
 	var defenders: Array = []
-	var field_center_x := 700.0  # Approximate field center
+	var field_center_x: float = state.get("field_center_x", 800.0)
 	
-	# Find attacker and defenders
+	# Find attacker and all defenders
 	for p in players:
 		if int(p.get("team", 0)) == team:
 			attacker = p
 		else:
 			defenders.append(p)
 	
-	if attacker.is_empty():
+	if attacker.is_empty() or defenders.is_empty():
 		return -1000.0
 	
 	var attacker_pos := attacker.get("pos", Vector2.ZERO) as Vector2
 	var score := 0.0
 	
 	if not defenders_alerted:
-		# Before defenders are alerted, try to get close to any defender
-		var min_defender_distance := INF
+		# PHASE 1: MUST get close to defenders - this is the PRIMARY objective
+		var closest_defender_distance := INF
+		var closest_defender_pos := Vector2.ZERO
+		
+		# Find the closest defender
 		for defender in defenders:
 			var defender_pos := defender.get("pos", Vector2.ZERO) as Vector2
 			var distance := attacker_pos.distance_to(defender_pos)
-			min_defender_distance = min(min_defender_distance, distance)
+			if distance < closest_defender_distance:
+				closest_defender_distance = distance
+				closest_defender_pos = defender_pos
 		
-		# Reward getting close to defenders (closer is better)
-		score += (50.0 - min_defender_distance) * 2.0
+		# MASSIVE reward for being close to ANY defender
+		score += (100.0 - closest_defender_distance) * 10.0
 		
-		# Encourage moving into opponent's territory
-		if team == 0:  # Team 0, encourage moving right
-			score += (attacker_pos.x - field_center_x) * 0.5
-		else:  # Team 1, encourage moving left
-			score += (field_center_x - attacker_pos.x) * 0.5
+		# Extra bonus for being very close to alerting range
+		if closest_defender_distance <= 40.0:
+			score += 300.0
+		if closest_defender_distance <= 35.0:  # Alert threshold
+			score += 500.0  # Huge bonus for triggering alert
+		
+		# PENALTY for moving away from defenders towards borders
+		if team == 0:  # Team 0 attacking right
+			# Only reward moving right if there are defenders to the right
+			var defenders_to_right := false
+			for defender in defenders:
+				var def_pos := defender.get("pos", Vector2.ZERO) as Vector2
+				if def_pos.x > attacker_pos.x:
+					defenders_to_right = true
+					break
+			if defenders_to_right:
+				score += (attacker_pos.x - field_center_x) * 0.3
+			else:
+				score -= (attacker_pos.x - field_center_x) * 2.0  # Penalty for going away from defenders
+		else:  # Team 1 attacking left
+			var defenders_to_left := false
+			for defender in defenders:
+				var def_pos := defender.get("pos", Vector2.ZERO) as Vector2
+				if def_pos.x < attacker_pos.x:
+					defenders_to_left = true
+					break
+			if defenders_to_left:
+				score += (field_center_x - attacker_pos.x) * 0.3
+			else:
+				score -= (field_center_x - attacker_pos.x) * 2.0  # Penalty for going away from defenders
+		
+		# HUGE penalty for being near field borders without engaging defenders
+		var border_penalty := 0.0
+		if attacker_pos.x < 250.0 or attacker_pos.x > 1350.0:
+			border_penalty += 200.0
+		if attacker_pos.y < 180.0 or attacker_pos.y > 740.0:
+			border_penalty += 200.0
+		score -= border_penalty
+		
 	else:
-		# After defenders are alerted, prioritize returning to own court
-		if team == 0:  # Team 0, want to return to left side
-			score += (field_center_x - attacker_pos.x) * 3.0
-		else:  # Team 1, want to return to right side
-			score += (attacker_pos.x - field_center_x) * 3.0
+		# PHASE 2: Defenders alerted - NOW try to return home safely
+		var distance_to_home: float
+		if team == 0:  # Team 0 wants to go left
+			distance_to_home = attacker_pos.x - field_center_x
+			score += (field_center_x - attacker_pos.x) * 15.0  # Very strong return incentive
+		else:  # Team 1 wants to go right
+			distance_to_home = field_center_x - attacker_pos.x
+			score += (attacker_pos.x - field_center_x) * 15.0  # Very strong return incentive
 		
-		# Penalty for being close to defenders when they're alerted
+		# Massive bonus for crossing back to safety
+		if abs(distance_to_home) < 10.0:
+			score += 1000.0  # Win condition bonus
+		elif abs(distance_to_home) < 30.0:
+			score += 500.0   # Close to safety
+		
+		# Avoid defenders while escaping
 		for defender in defenders:
 			var defender_pos := defender.get("pos", Vector2.ZERO) as Vector2
 			var distance := attacker_pos.distance_to(defender_pos)
-			score -= max(0.0, (30.0 - distance)) * 5.0  # Heavy penalty for being close
+			if distance < 20.0:
+				score -= (20.0 - distance) * 8.0  # Penalty for being too close during escape
 	
 	# Energy consideration
 	var energy := float(attacker.get("energy", 0.0))
-	score += energy * 0.1
+	score += energy * 0.05
 	
 	return score
 
@@ -325,15 +428,25 @@ static func _defender_heuristic(state: Dictionary, team: int, attacker_pos: Vect
 	var score := 0.0
 	
 	# Primary goal: get as close as possible to the attacker
-	score += (100.0 - distance_to_attacker) * 10.0
+	score += (90.0 - distance_to_attacker) * 8.0  # Increased urgency to chase
 	
-	# Bonus for being very close (catching range)
-	if distance_to_attacker <= 15.0:
-		score += 1000.0
+	# Graduated bonus system for being close to attacker
+	if distance_to_attacker <= 12.0:  # Catching range
+		score += 500.0  # High bonus for catching range
+	elif distance_to_attacker <= 20.0:  # Close range
+		score += 200.0  # Good bonus for being close
+	elif distance_to_attacker <= 35.0:  # Medium range
+		score += 50.0   # Small bonus for being in vicinity
 	
-	# Energy consideration  
+	# Predict attacker movement and reward intercepting moves
+	# TODO: Could add prediction logic here for smarter defenders
+	
+	# Energy consideration (defenders need energy to chase effectively)
 	var energy := float(defender.get("energy", 0.0))
-	score += energy * 0.05
+	score += energy * 0.1
+	
+	# Add small randomness to defender behavior
+	score += randf_range(-1.0, 1.0)
 	
 	return score
 
