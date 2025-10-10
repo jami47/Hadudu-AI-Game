@@ -18,6 +18,20 @@ func _ready() -> void:
 		spr.name = "Sprite"
 		add_child(spr)
 		print("[Player] Missing Sprite -> created for player id=%d" % player_id)
+	
+	# Add player number label
+	var label := get_node_or_null("PlayerLabel") as Label
+	if label == null:
+		label = Label.new()
+		label.name = "PlayerLabel"
+		add_child(label)
+		label.text = str(player_id + 1)  # Display 1-5 instead of 0-4
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.position = Vector2(-8, -8)  # Center the label on the player circle
+		label.size = Vector2(16, 16)
+		label.add_theme_color_override("font_color", Color.WHITE)
+		label.add_theme_font_size_override("font_size", 12)
 
 func set_texture(tex: Texture2D) -> void:
 	var spr := get_node_or_null("Sprite") as Sprite2D

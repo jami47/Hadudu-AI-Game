@@ -1,9 +1,10 @@
 extends Node2D
 
 @export var players_per_team: int = 5
-@export var round_turns_limit: int = 120
 @export var move_distance: float = 8.0
-@export var ai_depth: int = 2
+@export var ai_depth: int = 3
+@export var close_range_threshold: float = 25.0  # Distance for "very close" range
+@export var catch_distance: float = 15.0  # Distance for catching the attacker
 
 @export var energy_min: float = 60.0
 @export var energy_max: float = 100.0
@@ -16,7 +17,15 @@ var _rng := RandomNumberGenerator.new()
 var _running := false
 var _round := 0
 var _turn := 0
-var _active_team := 0
+
+# Game state variables
+enum GameState { WAITING, ROUND_ACTIVE, POINT_SCORED }
+var _game_state: GameState = GameState.WAITING
+var _attacking_team: int = 0  # 0 or 1
+var _defending_team: int = 1  # 1 or 0
+var _attacker_index: int = 0  # Which player from attacking team is the raider
+var _defenders_alerted: bool = false  # Whether defenders are rushing to catch attacker
+var _team_scores: Array[int] = [0, 0]
 
 var _panel_path := "UI/Panel"
 var _button_path := "UI/Panel/StartButton"
@@ -30,32 +39,27 @@ func _ready() -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
-	if not _running:
+	if not _running or _game_state != GameState.ROUND_ACTIVE:
 		return
+		
 	var players := _get_players()
 	for p in players:
 		p.regen(delta)
 		_clamp_to_field(p)
 
+	# Check if we need to alert defenders (attacker got close to any defender)
+	if not _defenders_alerted:
+		_check_for_defender_alert()
+	
+	# Get AI moves for all players
 	var state := _collect_state()
-	var team := _active_team
-	var move := AI.get_best_move(state, team, ai_depth, move_distance)
-	if move.has("player") and move["player"] != -1:
-		var idx := int(move["player"])
-		var delta_vec: Vector2 = move.get("delta", Vector2.ZERO)
-		if idx >= 0 and idx < players.size():
-			var pnode = players[idx]
-			var speedf: float = float(pnode.speed)
-			var energy_ratio: float = float(pnode.energy) / max(float(pnode.max_energy), 1.0)
-			var factor: float = (speedf / 120.0) * clamp(energy_ratio, 0.25, 1.0)
-			var disp: Vector2 = delta_vec * factor * 0.5
-			pnode.apply_move(disp)
-			_clamp_to_field(pnode)
+	_process_ai_moves(state, players)
+	
+	# Check win conditions
+	_check_round_end_conditions()
+	
 	_turn += 1
-	_active_team = 1 - _active_team
 	_update_hud()
-	if _turn >= round_turns_limit:
-		_end_round()
 
 func _ensure_ui() -> void:
 	var ui = get_node_or_null("UI")
@@ -134,12 +138,11 @@ func _on_start_round_pressed() -> void:
 	print("[Game] Round %d starting: spawning players..." % _round)
 	_running = false
 	_turn = 0
-	_active_team = 0
 	_rng.randomize()
 	_clear_players()
 	_spawn_players()
 	_build_hud_bars()
-	_running = true
+	_start_new_round()
 
 func _clear_players() -> void:
 	var plrs = get_node_or_null("Players")
@@ -155,6 +158,8 @@ func _spawn_players() -> void:
 		plrs.name = "Players"
 		add_child(plrs)
 	var per_team := players_per_team
+	var center_x := field_rect.position.x + field_rect.size.x * 0.5
+	
 	for t: int in [0, 1]:
 		for i: int in range(per_team):
 			var pscene := load("res://game/Player.tscn")
@@ -165,11 +170,18 @@ func _spawn_players() -> void:
 			p.base_speed = _rng.randf_range(speed_min, speed_max)
 			p.energy = p.max_energy
 			p.speed = p.base_speed
-			var y := _rng.randi_range(int(field_rect.position.y)+20, int(field_rect.position.y+field_rect.size.y)-20)
-			var x := int(field_rect.position.x) + 40 if t == 0 else int(field_rect.position.x + field_rect.size.x) - 40
+			
+			# Position players in their respective courts (team boxes)
+			var y := _rng.randi_range(int(field_rect.position.y)+40, int(field_rect.position.y+field_rect.size.y)-40)
+			var x: float
+			if t == 0:  # Team 0 on left side
+				x = field_rect.position.x + 60 + i * 30  # Spread players in their court
+			else:  # Team 1 on right side
+				x = center_x + 60 + i * 30  # Spread players in their court
+			
 			p.global_position = Vector2(x, y)
 			var color := Color(0.2,0.6,1.0,1.0) if t == 0 else Color(1.0,0.4,0.3,1.0)
-			var tex := Util.create_circle_texture(10.0, color)
+			var tex := Util.create_circle_texture(12.0, color)  # Slightly larger circles
 			p.set_texture(tex)
 			plrs.add_child(p)
 			print("[Game] Spawned Team %d Player %d at (%.1f, %.1f) E=%.1f S=%.1f" % [t, i, p.global_position.x, p.global_position.y, p.energy, p.speed])
@@ -241,9 +253,20 @@ func _update_hud() -> void:
 	var round_lb = get_node_or_null(_round_path)
 	var turn_lb = get_node_or_null(_turn_path)
 	if round_lb:
-		round_lb.text = "Round: %d  Status: %s" % [_round, "Running" if _running else "Stopped"]
+		var status_text = ""
+		match _game_state:
+			GameState.WAITING:
+				status_text = "Waiting to Start"
+			GameState.ROUND_ACTIVE:
+				status_text = "Team %d Attacking" % _attacking_team
+			GameState.POINT_SCORED:
+				status_text = "Point Scored!"
+		round_lb.text = "Round: %d  Status: %s  Score: %d - %d" % [_round, status_text, _team_scores[0], _team_scores[1]]
 	if turn_lb:
-		turn_lb.text = "Turn: %d / %d" % [_turn, round_turns_limit]
+		if _game_state == GameState.ROUND_ACTIVE:
+			turn_lb.text = "Turn: %d  Attacker: Player %d (Team %d)  Defenders Alerted: %s" % [_turn, _attacker_index + 1, _attacking_team, "Yes" if _defenders_alerted else "No"]
+		else:
+			turn_lb.text = "Turn: %d" % _turn
 
 	var panel = get_node_or_null(_panel_path)
 	if panel == null:
@@ -274,7 +297,14 @@ func _collect_state() -> Dictionary:
 			"energy": p.energy,
 			"speed": p.speed
 		})
-	return {"players": players_arr}
+	return {
+		"players": players_arr,
+		"attacking_team": _attacking_team,
+		"defending_team": _defending_team,
+		"attacker_index": _attacker_index,
+		"defenders_alerted": _defenders_alerted,
+		"field_center_x": field_rect.position.x + field_rect.size.x * 0.5
+	}
 
 func _get_players() -> Array:
 	var list := []
@@ -293,24 +323,133 @@ func _clamp_to_field(p: Node2D) -> void:
 	pos.y = clamp(pos.y, r.position.y, r.position.y + r.size.y)
 	p.global_position = pos
 
-func _end_round() -> void:
-	_running = false
-	var p := _get_players()
-	var e0 := 0.0
-	var e1 := 0.0
-	var c0 := 0
-	var c1 := 0
-	for pl in p:
-		if pl.team == 0:
-			e0 += pl.energy
-			c0 += 1
-		else:
-			e1 += pl.energy
-			c1 += 1
-	var avg0 := 0.0 if c0 == 0 else e0 / c0
-	var avg1 := 0.0 if c1 == 0 else e1 / c1
-	print("[Game] Round finished. Summary: team0_avg_energy=%.1f, team1_avg_energy=%.1f" % [avg0, avg1])
+func _clamp_to_field_with_restrictions(p: Node2D) -> void:
+	var r := field_rect
+	var pos := p.global_position
+	var center_x := r.position.x + r.size.x * 0.5
+	
+	# Basic field boundary clamping
+	pos.x = clamp(pos.x, r.position.x, r.position.x + r.size.x)
+	pos.y = clamp(pos.y, r.position.y, r.position.y + r.size.y)
+	
+	# Enforce court restrictions for defenders
+	if _game_state == GameState.ROUND_ACTIVE:
+		var attacker := _get_attacker(_get_players())
+		var is_attacker := (attacker != null and p == attacker)
+		
+		if not is_attacker:  # This is a defender
+			# Defenders must stay in their own court
+			if p.team == _defending_team:
+				if _defending_team == 0:  # Team 0 defends left side
+					pos.x = clamp(pos.x, r.position.x, center_x)
+				else:  # Team 1 defends right side  
+					pos.x = clamp(pos.x, center_x, r.position.x + r.size.x)
+	
+	p.global_position = pos
+
+func _start_new_round() -> void:
+	_game_state = GameState.ROUND_ACTIVE
+	_turn = 0
+	_defenders_alerted = false
+	_attacker_index = _rng.randi() % players_per_team  # Random attacker from attacking team
+	_running = true
+	print("[Game] Round %d started: Team %d attacking, Player %d is the attacker" % [_round, _attacking_team, _attacker_index + 1])
 	_update_hud()
+
+func _check_for_defender_alert() -> void:
+	var players := _get_players()
+	var attacker := _get_attacker(players)
+	if attacker == null:
+		return
+	
+	var defenders := _get_defenders(players)
+	for defender in defenders:
+		var distance := attacker.global_position.distance_to(defender.global_position)
+		if distance <= close_range_threshold:
+			_defenders_alerted = true
+			print("[Game] Defenders alerted! Attacker got within range of Player %d" % (defender.player_id + 1))
+			break
+
+func _process_ai_moves(state: Dictionary, players: Array) -> void:
+	# Process attacker move
+	var attacker := _get_attacker(players)
+	if attacker != null:
+		var attacker_move := AI.get_attacker_move(state, _attacking_team, _attacker_index, ai_depth, move_distance, _defenders_alerted)
+		_apply_player_move(attacker, attacker_move)
+	
+	# Process defender moves (only if alerted)
+	if _defenders_alerted:
+		var defenders := _get_defenders(players)
+		for defender in defenders:
+			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker.global_position if attacker else Vector2.ZERO)
+			_apply_player_move(defender, defender_move)
+
+func _apply_player_move(player: Node2D, move: Dictionary) -> void:
+	if move.has("delta") and move["delta"] != Vector2.ZERO:
+		var delta_vec: Vector2 = move["delta"]
+		var speedf: float = float(player.speed)
+		var energy_ratio: float = float(player.energy) / max(float(player.max_energy), 1.0)
+		var factor: float = (speedf / 120.0) * clamp(energy_ratio, 0.25, 1.0)
+		var disp: Vector2 = delta_vec * factor * 0.6
+		player.apply_move(disp)
+		_clamp_to_field_with_restrictions(player)
+
+func _check_round_end_conditions() -> void:
+	var players := _get_players()
+	var attacker := _get_attacker(players)
+	if attacker == null:
+		return
+	
+	var center_x := field_rect.position.x + field_rect.size.x * 0.5
+	var attacker_pos := attacker.global_position
+	
+	# Check if attacker was caught by any defender
+	if _defenders_alerted:
+		var defenders := _get_defenders(players)
+		for defender in defenders:
+			var distance := attacker_pos.distance_to(defender.global_position)
+			if distance <= catch_distance:
+				# Defending team gets the point
+				_award_point(_defending_team, "Attacker caught by Player %d" % (defender.player_id + 1))
+				return
+	
+	# Check if attacker returned to their original court safely
+	if _attacking_team == 0 and attacker_pos.x < center_x:
+		# Team 0 attacker returned to left side
+		if _defenders_alerted:  # Only award point if they actually engaged
+			_award_point(_attacking_team, "Attacker returned safely")
+	elif _attacking_team == 1 and attacker_pos.x > center_x:
+		# Team 1 attacker returned to right side  
+		if _defenders_alerted:  # Only award point if they actually engaged
+			_award_point(_attacking_team, "Attacker returned safely")
+
+func _award_point(team: int, reason: String) -> void:
+	_team_scores[team] += 1
+	_game_state = GameState.POINT_SCORED
+	print("[Game] Point awarded to Team %d: %s" % [team, reason])
+	
+	# Switch attacking/defending teams for next round
+	_attacking_team = 1 - _attacking_team
+	_defending_team = 1 - _defending_team
+	
+	_update_hud()
+	
+	# Start next round after a brief pause
+	await get_tree().create_timer(2.0).timeout
+	_start_new_round()
+
+func _get_attacker(players: Array) -> Node2D:
+	for player in players:
+		if player.team == _attacking_team and player.player_id == _attacker_index:
+			return player
+	return null
+
+func _get_defenders(players: Array) -> Array:
+	var defenders := []
+	for player in players:
+		if player.team == _defending_team:
+			defenders.append(player)
+	return defenders
 
 func _draw() -> void:
 	# Ground fill
