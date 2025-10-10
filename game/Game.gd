@@ -8,8 +8,8 @@ extends Node2D
 
 @export var energy_min: float = 60.0
 @export var energy_max: float = 100.0
-@export var speed_min: float = 100.0
-@export var speed_max: float = 140.0
+@export var speed_min: float = 98.0   # Minimum speed for playability
+@export var speed_max: float = 157.0  # Maximum speed for variety
 
 @export var field_rect: Rect2 = Rect2(200, 140, 1200, 640) # x,y,w,h
 
@@ -173,7 +173,25 @@ func _spawn_players() -> void:
 			p.player_id = i
 			p.team = t
 			p.max_energy = _rng.randf_range(energy_min, energy_max)
-			p.base_speed = _rng.randf_range(speed_min, speed_max)
+			# Create more natural speed variation system
+			var base_speed: float = 125.0  # Central speed value
+			
+			# Generate player-specific speed with wider, more realistic distribution
+			var speed_variation: float = _rng.randf_range(-25.0, 25.0)  # ±25 speed difference
+			var secondary_variation: float = _rng.randf_range(-8.0, 8.0)  # Additional randomness
+			
+			# Apply team-based slight bias for balance (subtle, not game-breaking)
+			var team_bias: float = 0.0
+			if t == _attacking_team:
+				team_bias = _rng.randf_range(-2.0, 4.0)  # Slight attacking advantage sometimes
+			else:
+				team_bias = _rng.randf_range(-3.0, 3.0)  # More balanced defending range
+			
+			# Calculate final speed with all factors
+			var calculated_speed: float = base_speed + speed_variation + secondary_variation + team_bias
+			
+			# Ensure reasonable speed bounds with some extreme outliers allowed
+			p.base_speed = clamp(calculated_speed, 95.0, 160.0)
 			p.energy = p.max_energy
 			p.speed = p.base_speed
 			
@@ -373,10 +391,14 @@ func _check_for_defender_alert() -> void:
 	if attacker == null:
 		return
 	
+	# Variable alert distance for more unpredictable gameplay
+	var dynamic_alert_range: float = close_range_threshold + _rng.randf_range(-15.0, 10.0)
+	dynamic_alert_range = max(30.0, dynamic_alert_range)  # Minimum 30 units
+	
 	var defenders := _get_defenders(players)
 	for defender in defenders:
 		var distance := attacker.global_position.distance_to(defender.global_position)
-		if distance <= close_range_threshold:
+		if distance <= dynamic_alert_range:
 			_defenders_alerted = true
 			print("[Game] Defenders alerted! Attacker got within range of Player %d" % (defender.player_id + 1))
 			break
@@ -399,8 +421,7 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 		var defenders := _get_defenders(players)
 		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
 		
-		# Debug: Print how many defenders are moving
-		print("[Game] Processing %d defenders chasing attacker at %v" % [defenders.size(), attacker_pos])
+		# All defenders chase the attacker when alerted
 		
 		for defender in defenders:
 			# Ensure all defenders move towards attacker with simplified direct approach
@@ -411,9 +432,6 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 			if distance_to_attacker > 5.0:  # Only move if not too close
 				var chase_move := {"delta": direction_to_attacker * move_distance}
 				_apply_player_move(defender, chase_move)
-				print("[Game] Defender %d (Team %d) chasing attacker: distance=%.1f, move=%v" % [defender.player_id + 1, defender.team, distance_to_attacker, chase_move["delta"]])
-			else:
-				print("[Game] Defender %d (Team %d) too close to attacker, staying put" % [defender.player_id + 1, defender.team])
 	
 	# All other players (non-attacking team members and non-designated attacker) should not move
 	# They'll stay in place due to the restriction system
@@ -432,9 +450,14 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 		var is_defender: bool = (player.team == _defending_team and _defenders_alerted)
 		
 		if is_attacker and _defenders_alerted:
-			base_scale *= 1.3  # Attacker escape boost
+			# Variable escape boost based on energy and randomness for unpredictability
+			var energy_factor: float = energy_ratio * 0.3  # 0.0 to 0.3 bonus
+			var random_boost: float = _rng.randf_range(1.2, 1.6)  # 1.2x to 1.6x variable boost
+			base_scale *= (random_boost + energy_factor)
 		elif is_defender:
-			base_scale *= 1.2  # Give defenders a chase boost when alerted
+			# Defenders get consistent but varied chase advantage
+			var chase_boost: float = _rng.randf_range(1.05, 1.25)  # 1.05x to 1.25x variable boost
+			base_scale *= chase_boost
 		
 		var max_displacement: float = speedf * base_scale
 		

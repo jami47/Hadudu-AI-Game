@@ -200,45 +200,39 @@ static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: 
 			for scored_move in scored_moves:
 				moves.append(scored_move["move"])
 	else:
-		# Defenders are alerted: prioritize returning to own court while avoiding defenders
+		# URGENT ESCAPE MODE: Defenders are alerted, must return home immediately!
 		var direction_to_home: Vector2
 		if team == 0:  # Team 0 wants to go left (towards smaller x)
 			direction_to_home = Vector2(-1, 0)
 		else:  # Team 1 wants to go right (towards larger x) 
 			direction_to_home = Vector2(1, 0)
 		
-		# Find closest defender to avoid
-		var closest_defender_pos: Vector2 = Vector2.ZERO
-		var min_defender_distance := INF
+		# Collect all defender positions for comprehensive evasion
+		var all_defenders: Array = []
 		for player in state["players"]:
 			if int(player.get("team", 0)) != team:  # This is a defender
 				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
-				var distance := attacker_pos.distance_to(defender_pos)
-				if distance < min_defender_distance:
-					min_defender_distance = distance
-					closest_defender_pos = defender_pos
+				all_defenders.append(defender_pos)
 		
 		var scored_moves: Array = []
 		for direction in dirs:
-			var alignment_score := direction.normalized().dot(direction_to_home)
+			# MASSIVE priority for moves toward home court
+			var alignment_score := direction.normalized().dot(direction_to_home) * 100.0  # Increased from implicit 1.0
 			
-			# Strong bonus for moving away from ALL defenders
-			if closest_defender_pos != Vector2.ZERO:
-				var new_pos := attacker_pos + direction
-				var evasion_bonus := 0.0
-				
-				# Check distance from ALL defenders, not just closest
-				for player in state["players"]:
-					if int(player.get("team", 0)) != team:
-						var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
-						var current_dist := attacker_pos.distance_to(defender_pos)
-						var new_dist := new_pos.distance_to(defender_pos)
-						if new_dist > current_dist:
-							evasion_bonus += 0.3  # Bonus for moving away from each defender
-				
-				alignment_score += evasion_bonus
+			# Calculate total evasion bonus from ALL defenders
+			var new_pos := attacker_pos + direction
+			var total_evasion_bonus := 0.0
 			
-			scored_moves.append({"move": direction, "score": alignment_score})
+			for defender_pos in all_defenders:
+				var current_dist := attacker_pos.distance_to(defender_pos)
+				var new_dist := new_pos.distance_to(defender_pos)
+				if new_dist > current_dist:
+					total_evasion_bonus += 2.0  # Increased evasion bonus per defender
+				else:
+					total_evasion_bonus -= 5.0  # Heavy penalty for getting closer to any defender
+			
+			var final_score := alignment_score + total_evasion_bonus
+			scored_moves.append({"move": direction, "score": final_score})
 		
 		scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
 		for scored_move in scored_moves:
