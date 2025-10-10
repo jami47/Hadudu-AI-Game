@@ -62,9 +62,7 @@ static func _generate_moves(state: Dictionary, team: int, step: float) -> Array:
 	return arr
 
 static func _apply_move(state: Dictionary, move: Dictionary) -> Dictionary:
-	var s2 := {
-		"players": []
-	}
+	var s2 := {"players": []}
 	var idx := int(move["player"])
 	var delta := move["delta"] as Vector2
 	for i in range(state["players"].size()):
@@ -77,7 +75,6 @@ static func _apply_move(state: Dictionary, move: Dictionary) -> Dictionary:
 	return s2
 
 static func _heuristic(state: Dictionary, team: int) -> float:
-	# Combine: progress to opponent half (x position), own energy, and distance to nearest opponent (prefer being near? choose mild repulsion)
 	var players: Array = state["players"]
 	if players.is_empty():
 		return 0.0
@@ -95,14 +92,11 @@ static func _heuristic(state: Dictionary, team: int) -> float:
 		var pos := p.get("pos", Vector2.ZERO) as Vector2
 		var energy := float(p.get("energy", 0.0))
 		if t == team:
-			# Encourage being deeper into enemy half
 			score += (pos.x - mid_x) * 0.01
 			score += energy * 0.02
-			# Keep modest distance from nearest opponent
 			var d := _nearest_opponent_distance(players, p)
-			score += clamp( (40.0 - d) * -0.01, -1.0, 1.0 )
+			score += clamp((40.0 - d) * -0.01, -1.0, 1.0)
 		else:
-			# Opponent benefits subtract
 			score -= (pos.x - mid_x) * 0.01
 			score -= energy * 0.02
 	return score
@@ -114,7 +108,7 @@ static func _nearest_opponent_distance(players: Array, me: Dictionary) -> float:
 	for p in players:
 		if int(p.get("team", 0)) == my_team:
 			continue
-		var d := ( (p.get("pos", Vector2.ZERO) as Vector2) - my_pos ).length()
+		var d := ((p.get("pos", Vector2.ZERO) as Vector2) - my_pos).length()
 		if d < best:
 			best = d
 	return best if best < INF * 0.5 else 1000.0
