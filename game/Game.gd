@@ -2,7 +2,7 @@ extends Node2D
 
 @export var players_per_team: int = 5
 @export var move_distance: float = 8.0
-@export var ai_depth: int = 2
+@export var ai_depth: int = 1  # Reduced depth for faster, more responsive AI
 @export var close_range_threshold: float = 35.0  # Distance for "very close" range (increased)
 @export var catch_distance: float = 12.0  # Distance for catching the attacker (decreased)
 
@@ -49,17 +49,18 @@ func _process(delta: float) -> void:
 		p.regen(delta)
 		_clamp_to_field_with_restrictions(p)
 	
-	# Process AI moves every 3 frames for smoother movement
+	# Process AI moves every frame for responsive defender movement
 	_frame_counter += 1
-	if _frame_counter >= 3:
-		_frame_counter = 0
-		
-		# Check if we need to alert defenders (attacker got close to any defender)
-		if not _defenders_alerted:
-			_check_for_defender_alert()
-		
-		# Get AI moves for all players
-		var state := _collect_state()
+	
+	# Always check for defender alerts and process defender moves for responsiveness
+	if not _defenders_alerted:
+		_check_for_defender_alert()
+	
+	# Get AI moves for all players - process every frame when defenders are alerted
+	var state := _collect_state()
+	if _defenders_alerted or _frame_counter >= 2:  # Defenders move every frame, attacker every 2 frames
+		if _frame_counter >= 2:
+			_frame_counter = 0
 		_process_ai_moves(state, players)
 		
 		# Check win conditions
@@ -397,16 +398,22 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 	if _defenders_alerted:
 		var defenders := _get_defenders(players)
 		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
+		
+		# Debug: Print how many defenders are moving
+		print("[Game] Processing %d defenders chasing attacker at %v" % [defenders.size(), attacker_pos])
+		
 		for defender in defenders:
-			# All defenders from defending team should move towards attacker
-			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
-			if defender_move.has("delta") and defender_move["delta"] != Vector2.ZERO:
-				_apply_player_move(defender, defender_move)
+			# Ensure all defenders move towards attacker with simplified direct approach
+			var direction_to_attacker: Vector2 = (attacker_pos - defender.global_position).normalized()
+			var distance_to_attacker: float = defender.global_position.distance_to(attacker_pos)
+			
+			# Use direct movement for more predictable chasing behavior
+			if distance_to_attacker > 5.0:  # Only move if not too close
+				var chase_move := {"delta": direction_to_attacker * move_distance}
+				_apply_player_move(defender, chase_move)
+				print("[Game] Defender %d (Team %d) chasing attacker: distance=%.1f, move=%v" % [defender.player_id + 1, defender.team, distance_to_attacker, chase_move["delta"]])
 			else:
-				# Force defender to move towards attacker if AI returns zero
-				var direction_to_attacker :Vector2 = (attacker_pos - defender.global_position).normalized()
-				var forced_move := {"delta": direction_to_attacker * move_distance}
-				_apply_player_move(defender, forced_move)
+				print("[Game] Defender %d (Team %d) too close to attacker, staying put" % [defender.player_id + 1, defender.team])
 	
 	# All other players (non-attacking team members and non-designated attacker) should not move
 	# They'll stay in place due to the restriction system
@@ -418,12 +425,16 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 		var energy_ratio: float = float(player.energy) / max(float(player.max_energy), 1.0)
 		
 		# Calculate maximum allowed displacement based on player's actual speed
-		var base_scale: float = 0.12  # Smoother movement scale
+		var base_scale: float = 0.15  # Increased base movement scale for more responsive movement
 		
 		# Give attacker a speed boost when defenders are alerted (escape mode)
 		var is_attacker: bool = (player.team == _attacking_team and player.player_id == _attacker_index)
+		var is_defender: bool = (player.team == _defending_team and _defenders_alerted)
+		
 		if is_attacker and _defenders_alerted:
-			base_scale *= 1.4  # Increased escape boost
+			base_scale *= 1.3  # Attacker escape boost
+		elif is_defender:
+			base_scale *= 1.2  # Give defenders a chase boost when alerted
 		
 		var max_displacement: float = speedf * base_scale
 		
