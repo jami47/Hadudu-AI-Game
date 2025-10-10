@@ -375,13 +375,21 @@ func _process_ai_moves(state: Dictionary, players: Array) -> void:
 	var attacker := _get_attacker(players)
 	if attacker != null:
 		var attacker_move := AI.get_attacker_move(state, _attacking_team, _attacker_index, ai_depth, move_distance, _defenders_alerted)
-		_apply_player_move(attacker, attacker_move)
+		if attacker_move["delta"] != Vector2.ZERO:
+			_apply_player_move(attacker, attacker_move)
+		else:
+			# Force attacker to move towards opponent court if AI returns zero movement
+			var forced_move := {"delta": Vector2(move_distance, 0) if _attacking_team == 0 else Vector2(-move_distance, 0)}
+			_apply_player_move(attacker, forced_move)
+			print("[Game] Forced attacker movement to prevent standstill")
 	
 	# Process defender moves (only if alerted)
 	if _defenders_alerted:
 		var defenders := _get_defenders(players)
+		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
 		for defender in defenders:
-			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker.global_position if attacker else Vector2.ZERO)
+			# Each defender gets their own AI move towards the attacker
+			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
 			_apply_player_move(defender, defender_move)
 
 func _apply_player_move(player: Node2D, move: Dictionary) -> void:
@@ -389,9 +397,15 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 		var delta_vec: Vector2 = move["delta"]
 		var speedf: float = float(player.speed)
 		var energy_ratio: float = float(player.energy) / max(float(player.max_energy), 1.0)
-		var factor: float = (speedf / 120.0) * clamp(energy_ratio, 0.25, 1.0)
-		var disp: Vector2 = delta_vec * factor * 0.6
-		player.apply_move(disp)
+		
+		# Calculate maximum allowed displacement based on player's actual speed
+		var max_displacement: float = speedf * 0.05  # Scale factor to control speed
+		var desired_displacement: Vector2 = delta_vec.normalized() * max_displacement
+		
+		# Apply energy penalty to the displacement
+		var final_displacement: Vector2 = desired_displacement * clamp(energy_ratio, 0.25, 1.0)
+		
+		player.apply_move(final_displacement)
 		_clamp_to_field_with_restrictions(player)
 
 func _check_round_end_conditions() -> void:
@@ -434,8 +448,19 @@ func _award_point(team: int, reason: String) -> void:
 	
 	_update_hud()
 	
-	# Start next round after a brief pause
-	await get_tree().create_timer(2.0).timeout
+	# Start next round after a brief pause using a timer
+	var timer := Timer.new()
+	add_child(timer)
+	timer.wait_time = 2.0
+	timer.one_shot = true
+	timer.timeout.connect(_on_auto_start_next_round)
+	timer.start()
+
+func _on_auto_start_next_round() -> void:
+	# Clean up the timer
+	for child in get_children():
+		if child is Timer:
+			child.queue_free()
 	_start_new_round()
 
 func _get_attacker(players: Array) -> Node2D:

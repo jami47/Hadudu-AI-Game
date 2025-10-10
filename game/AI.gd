@@ -12,10 +12,15 @@ static func _directions(step: float) -> Array[Vector2]:
 
 # Get move for attacking player (raider)
 static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
-	var alpha := -INF
-	var beta := INF
-	var best := {"delta": Vector2.ZERO, "score": -INF}
+	var alpha: float = -INF
+	var beta: float = INF
+	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
 	var moves := _generate_attacker_moves(state, team, attacker_id, step_size, defenders_alerted)
+	
+	if moves.is_empty():
+		# Fallback: return a basic move towards opponent court
+		var basic_move := Vector2(step_size, 0) if team == 0 else Vector2(-step_size, 0)
+		return {"delta": basic_move, "score": 0.0}
 	
 	for move in moves:
 		var new_state := _apply_attacker_move(state, team, attacker_id, move)
@@ -25,14 +30,32 @@ static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, de
 		alpha = max(alpha, score)
 		if beta <= alpha:
 			break
+	
+	# If all moves have negative infinity score, pick the first non-zero move
+	if best["score"] == -INF and moves.size() > 1:
+		for move in moves:
+			if move != Vector2.ZERO:
+				best = {"delta": move, "score": 0.0}
+				break
+	
 	return best
 
 # Get move for defending player
 static func get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
-	var alpha := -INF
-	var beta := INF
-	var best := {"delta": Vector2.ZERO, "score": -INF}
+	var alpha: float = -INF
+	var beta: float = INF
+	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
 	var moves := _generate_defender_moves(state, team, defender_id, step_size, attacker_pos)
+	
+	if moves.is_empty():
+		# Fallback: move directly towards attacker
+		var defender_pos: Vector2 = Vector2.ZERO
+		for player in state["players"]:
+			if int(player.get("team", 0)) == team and int(player.get("id", 0)) == defender_id:
+				defender_pos = player.get("pos", Vector2.ZERO) as Vector2
+				break
+		var direction := (attacker_pos - defender_pos).normalized() * step_size
+		return {"delta": direction, "score": 0.0}
 	
 	for move in moves:
 		var new_state := _apply_defender_move(state, team, defender_id, move)
@@ -42,6 +65,14 @@ static func get_defender_move(state: Dictionary, team: int, defender_id: int, de
 		alpha = max(alpha, score)
 		if beta <= alpha:
 			break
+	
+	# If all moves have negative infinity score, pick the first non-zero move that goes towards attacker
+	if best["score"] == -INF and moves.size() > 1:
+		for move in moves:
+			if move != Vector2.ZERO:
+				best = {"delta": move, "score": 0.0}
+				break
+	
 	return best
 
 # Minimax for attacker (trying to maximize score)
@@ -104,23 +135,92 @@ static func _opponent(t: int) -> int:
 # Generate moves for attacker
 static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: int, step: float, defenders_alerted: bool) -> Array[Vector2]:
 	var moves: Array[Vector2] = []
-	var dirs := _directions(step)
 	
-	# If defenders are not alerted, prioritize getting close to them
-	# If defenders are alerted, prioritize returning to own court
-	for direction in dirs:
-		moves.append(direction)
+	# Find attacker's current position
+	var attacker_pos: Vector2 = Vector2.ZERO
+	for player in state["players"]:
+		if int(player.get("team", 0)) == team and int(player.get("id", 0)) == attacker_id:
+			attacker_pos = player.get("pos", Vector2.ZERO) as Vector2
+			break
+	
+	var dirs := _directions(step)
+	var field_center_x: float = state.get("field_center_x", 700.0)
+	
+	if not defenders_alerted:
+		# Find closest defender to target
+		var closest_defender_pos: Vector2 = Vector2.ZERO
+		var min_distance := INF
+		for player in state["players"]:
+			if int(player.get("team", 0)) != team:  # This is a defender
+				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
+				var distance := attacker_pos.distance_to(defender_pos)
+				if distance < min_distance:
+					min_distance = distance
+					closest_defender_pos = defender_pos
+		
+		# Prioritize moves towards the closest defender
+		if closest_defender_pos != Vector2.ZERO:
+			var direction_to_defender := (closest_defender_pos - attacker_pos).normalized()
+			var scored_moves: Array = []
+			for direction in dirs:
+				var alignment_score := direction.normalized().dot(direction_to_defender)
+				scored_moves.append({"move": direction, "score": alignment_score})
+			
+			scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
+			for scored_move in scored_moves:
+				moves.append(scored_move["move"])
+		else:
+			# Fallback: just move towards opponent's court
+			for direction in dirs:
+				moves.append(direction)
+	else:
+		# Defenders are alerted: prioritize returning to own court
+		var direction_to_home: Vector2
+		if team == 0:  # Team 0 wants to go left (towards smaller x)
+			direction_to_home = Vector2(-1, 0)
+		else:  # Team 1 wants to go right (towards larger x) 
+			direction_to_home = Vector2(1, 0)
+		
+		var scored_moves: Array = []
+		for direction in dirs:
+			var alignment_score := direction.normalized().dot(direction_to_home)
+			scored_moves.append({"move": direction, "score": alignment_score})
+		
+		scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
+		for scored_move in scored_moves:
+			moves.append(scored_move["move"])
 	
 	return moves
 
 # Generate moves for defender  
 static func _generate_defender_moves(state: Dictionary, team: int, defender_id: int, step: float, attacker_pos: Vector2) -> Array[Vector2]:
 	var moves: Array[Vector2] = []
+	
+	# Find defender's current position
+	var defender_pos: Vector2 = Vector2.ZERO
+	for player in state["players"]:
+		if int(player.get("team", 0)) == team and int(player.get("id", 0)) == defender_id:
+			defender_pos = player.get("pos", Vector2.ZERO) as Vector2
+			break
+	
+	# Calculate direction towards attacker
+	var direction_to_attacker := (attacker_pos - defender_pos).normalized()
+	
+	# Generate moves that prioritize moving towards the attacker
 	var dirs := _directions(step)
 	
-	# Defenders should move towards the attacker
+	# Sort directions by how well they align with the direction to attacker
+	var scored_moves: Array = []
 	for direction in dirs:
-		moves.append(direction)
+		var alignment_score := direction.normalized().dot(direction_to_attacker)
+		scored_moves.append({"move": direction, "score": alignment_score})
+	
+	# Sort by score (highest first - best alignment with attacker direction)
+	scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
+	
+	# Add moves in order of preference
+	for scored_move in scored_moves:
+		moves.append(scored_move["move"])
 	
 	return moves
 

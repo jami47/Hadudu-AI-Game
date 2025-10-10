@@ -28,10 +28,13 @@ func _ready() -> void:
 		label.text = str(player_id + 1)  # Display 1-5 instead of 0-4
 		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		label.position = Vector2(-8, -8)  # Center the label on the player circle
-		label.size = Vector2(16, 16)
+		# Position label at center of player (0,0 relative to player)
+		label.position = Vector2(-6, -8)  
+		label.size = Vector2(12, 16)
 		label.add_theme_color_override("font_color", Color.WHITE)
 		label.add_theme_font_size_override("font_size", 12)
+		# Make sure label follows the player and is visible
+		label.z_index = 10  # Ensure it's above the sprite
 
 func set_texture(tex: Texture2D) -> void:
 	var spr := get_node_or_null("Sprite") as Sprite2D
@@ -47,6 +50,14 @@ func apply_move(displacement: Vector2) -> void:
 	var cost := displacement.length() * 0.1
 	energy = max(0.0, energy - cost)
 	global_position += displacement
+	# Update label position to stay centered
+	_update_label_position()
+
+func _update_label_position() -> void:
+	var label := get_node_or_null("PlayerLabel") as Label
+	if label != null:
+		# Keep the label centered on the player
+		label.position = Vector2(-6, -8)
 
 func regen(delta: float) -> void:
 	energy = min(max_energy, energy + 2.0 * delta)
