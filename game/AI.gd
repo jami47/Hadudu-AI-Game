@@ -147,41 +147,64 @@ static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: 
 	var field_center_x: float = state.get("field_center_x", 700.0)
 	
 	if not defenders_alerted:
-		# AGGRESSIVE DEFENDER SEEKING - Must engage defenders, not avoid them
+		# STRATEGIC DEFENDER TARGETING - Evaluate all defenders using multi-factor heuristic
 		var all_defenders: Array = []
-		var closest_defender_pos: Vector2 = Vector2.ZERO
-		var min_distance := INF
+		var target_defender: Dictionary = {}
+		var best_target_score := -INF
 		
-		# Collect all defender positions
+		# Collect all defender data (position, speed, energy)
 		for player in state["players"]:
 			if int(player.get("team", 0)) != team:  # This is a defender
-				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
-				all_defenders.append(defender_pos)
-				var distance := attacker_pos.distance_to(defender_pos)
-				if distance < min_distance:
-					min_distance = distance
-					closest_defender_pos = defender_pos
+				var defender_data := {
+					"pos": player.get("pos", Vector2.ZERO) as Vector2,
+					"speed": player.get("speed", 100.0) as float,
+					"energy": player.get("energy", 80.0) as float,
+					"max_energy": player.get("max_energy", 100.0) as float
+				}
+				all_defenders.append(defender_data)
+				
+				# Calculate target score for this defender
+				var distance := attacker_pos.distance_to(defender_data["pos"])
+				var energy_ratio : float = defender_data["energy"] / max(defender_data["max_energy"], 1.0)
+				
+				# Multi-factor heuristic: closer is better, slower is better, lower energy is better
+				var target_score := 0.0
+				target_score += (150.0 - distance) * 2.0  # Distance factor (closer = higher score)
+				target_score += (160.0 - defender_data["speed"]) * 1.5  # Speed factor (slower = higher score) 
+				target_score += (1.0 - energy_ratio) * 100.0  # Energy factor (lower energy = higher score)
+				
+				if target_score > best_target_score:
+					best_target_score = target_score
+					target_defender = defender_data
 		
-		if closest_defender_pos != Vector2.ZERO:
-			# Prioritize moves that get closer to ANY defender
+		if target_defender.has("pos"):
+			# Prioritize moves that get closer to the strategically chosen target
 			var scored_moves: Array = []
+			var target_pos := target_defender["pos"] as Vector2
+			var current_distance := attacker_pos.distance_to(target_pos)
+			
 			for direction in dirs:
 				var new_pos := attacker_pos + direction
 				var score := 0.0
 				
-				# Calculate how much closer this move gets us to the nearest defender
-				var best_distance_after := INF
-				for defender_pos in all_defenders:
-					var dist_after := new_pos.distance_to(defender_pos)
-					best_distance_after = min(best_distance_after, dist_after)
+				# Primary factor: distance reduction to target
+				var new_distance := new_pos.distance_to(target_pos)
+				score += (current_distance - new_distance) * 12.0
 				
-				# Heavy reward for moves that reduce distance to closest defender
-				score += (min_distance - best_distance_after) * 10.0
+				# Secondary factor: consider all defenders to avoid getting trapped
+				var min_dist_to_any := INF
+				for defender_data in all_defenders:
+					var dist := new_pos.distance_to(defender_data["pos"])
+					min_dist_to_any = min(min_dist_to_any, dist)
 				
-				# Direction alignment with closest defender
+				# Bonus for moves that maintain reasonable distance to others while targeting main one
+				if min_dist_to_any > 25.0:  # Not too close to any defender
+					score += 3.0
+				
+				# Direction alignment with target defender
 				if direction.length() > 0:
-					var direction_to_closest := (closest_defender_pos - attacker_pos).normalized()
-					score += direction.normalized().dot(direction_to_closest) * 5.0
+					var direction_to_target := (target_pos - attacker_pos).normalized()
+					score += direction.normalized().dot(direction_to_target) * 6.0
 				
 				scored_moves.append({"move": direction, "score": score})
 			
@@ -310,26 +333,47 @@ static func _attacker_heuristic(state: Dictionary, team: int, defenders_alerted:
 	var score := 0.0
 	
 	if not defenders_alerted:
-		# PHASE 1: MUST get close to defenders - this is the PRIMARY objective
-		var closest_defender_distance := INF
-		var closest_defender_pos := Vector2.ZERO
+		# PHASE 1: Strategic defender targeting using multi-factor heuristic
+		var target_defender: Dictionary = {}
+		var best_target_score := -INF
+		var closest_distance := INF
 		
-		# Find the closest defender
+		# Evaluate each defender using multi-factor heuristic
 		for defender in defenders:
 			var defender_pos := defender.get("pos", Vector2.ZERO) as Vector2
+			var defender_speed := defender.get("speed", 100.0) as float
+			var defender_energy := defender.get("energy", 80.0) as float
+			var defender_max_energy := defender.get("max_energy", 100.0) as float
 			var distance := attacker_pos.distance_to(defender_pos)
-			if distance < closest_defender_distance:
-				closest_defender_distance = distance
-				closest_defender_pos = defender_pos
+			
+			closest_distance = min(closest_distance, distance)
+			
+			# Calculate strategic value of targeting this defender
+			var energy_ratio : float = defender_energy / max(defender_max_energy, 1.0)
+			var target_score := 0.0
+			target_score += (150.0 - distance) * 2.0  # Distance factor
+			target_score += (160.0 - defender_speed) * 1.5  # Speed factor 
+			target_score += (1.0 - energy_ratio) * 100.0  # Energy factor
+			
+			if target_score > best_target_score:
+				best_target_score = target_score
+				target_defender = {
+					"pos": defender_pos,
+					"distance": distance,
+					"score": target_score
+				}
 		
-		# MASSIVE reward for being close to ANY defender
-		score += (100.0 - closest_defender_distance) * 10.0
-		
-		# Extra bonus for being very close to alerting range
-		if closest_defender_distance <= 40.0:
-			score += 300.0
-		if closest_defender_distance <= 35.0:  # Alert threshold
-			score += 500.0  # Huge bonus for triggering alert
+		# Reward based on strategic target evaluation
+		if target_defender.has("distance"):
+			var target_distance := target_defender["distance"] as float
+			score += (100.0 - target_distance) * 12.0
+			score += best_target_score * 0.5  # Bonus based on target quality
+			
+			# Extra bonus for being very close to alerting range
+			if target_distance <= 40.0:
+				score += 300.0
+			if target_distance <= 35.0:  # Alert threshold
+				score += 500.0  # Huge bonus for triggering alert
 		
 		# PENALTY for moving away from defenders towards borders
 		if team == 0:  # Team 0 attacking right

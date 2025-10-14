@@ -11,7 +11,7 @@ extends Node2D
 @export var speed_min: float = 98.0   # Minimum speed for playability
 @export var speed_max: float = 157.0  # Maximum speed for variety
 
-@export var field_rect: Rect2 = Rect2(200, 140, 1200, 640) # x,y,w,h
+@export var field_rect: Rect2 = Rect2(250, 140, 1300, 640) # x,y,w,h (centered with space for side columns)
 
 var _rng := RandomNumberGenerator.new()
 var _running := false
@@ -48,6 +48,9 @@ func _process(delta: float) -> void:
 	for p in players:
 		p.regen(delta)
 		_clamp_to_field_with_restrictions(p)
+	
+	# Update HUD display every frame to show current stats
+	_update_hud()
 	
 	# Process AI moves every frame for responsive defender movement
 	_frame_counter += 1
@@ -112,34 +115,8 @@ func _ensure_ui() -> void:
 		panel.add_child(turn_lb)
 		turn_lb.position = Vector2(130, 36)
 
-	var hud_row := panel.get_node_or_null("HUDRow") as HBoxContainer
-	if hud_row == null:
-		hud_row = HBoxContainer.new()
-		hud_row.name = "HUDRow"
-		panel.add_child(hud_row)
-		hud_row.position = Vector2(12, 64)
-		hud_row.custom_minimum_size = Vector2(1520, 44)
-		hud_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var t0_box := hud_row.get_node_or_null("Team0Box") as VBoxContainer
-	if t0_box == null:
-		t0_box = VBoxContainer.new()
-		t0_box.name = "Team0Box"
-		hud_row.add_child(t0_box)
-		t0_box.custom_minimum_size = Vector2(750, 44)
-		var t0_title := Label.new()
-		t0_title.text = "Team 0"
-		t0_box.add_child(t0_title)
-
-	var t1_box := hud_row.get_node_or_null("Team1Box") as VBoxContainer
-	if t1_box == null:
-		t1_box = VBoxContainer.new()
-		t1_box.name = "Team1Box"
-		hud_row.add_child(t1_box)
-		t1_box.custom_minimum_size = Vector2(750, 44)
-		var t1_title := Label.new()
-		t1_title.text = "Team 1"
-		t1_box.add_child(t1_title)
+	# Create side columns for team stats (outside game field)
+	_create_side_columns(panel)
 
 	_update_hud()
 	queue_redraw()
@@ -223,68 +200,196 @@ func _spawn_players() -> void:
 			p.set_texture(tex)
 			plrs.add_child(p)
 			print("[Game] Spawned Team %d Player %d at (%.1f, %.1f) E=%.1f S=%.1f" % [t, i, p.global_position.x, p.global_position.y, p.energy, p.speed])
+	
+	# Update the side tables with new player stats
+	_build_hud_bars()
 
-func _hud_add_player_row(dst: VBoxContainer, team_id: int, player_idx: int) -> void:
-	var hb := HBoxContainer.new()
-	hb.custom_minimum_size = Vector2(740, 24)
-
-	var lbl := Label.new()
-	lbl.text = "P%d:" % player_idx
-	lbl.custom_minimum_size = Vector2(36, 24)
-
-	var ebar := ProgressBar.new()
-	ebar.name = "E_%d_%d" % [team_id, player_idx]
-	ebar.max_value = 100.0
-	ebar.value = 0.0
-	ebar.custom_minimum_size = Vector2(340, 20)
-	ebar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var sbar := ProgressBar.new()
-	sbar.name = "S_%d_%d" % [team_id, player_idx]
-	sbar.max_value = 200.0
-	sbar.value = 0.0
-	sbar.custom_minimum_size = Vector2(320, 20)
-	sbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	hb.add_child(lbl)
-	hb.add_child(ebar)
-	hb.add_child(sbar)
-	dst.add_child(hb)
+func _create_side_columns(panel: Control) -> void:
+	# Remove old stats containers if exist
+	var old_left = panel.get_node_or_null("LeftStats")
+	var old_right = panel.get_node_or_null("RightStats")
+	var old_hud = panel.get_node_or_null("HUDRow")
+	if old_left:
+		old_left.queue_free()
+	if old_right:
+		old_right.queue_free()
+	if old_hud:
+		old_hud.queue_free()
+	
+	# Calculate vertical center position for tables
+	var field_center_y = field_rect.position.y + field_rect.size.y / 2
+	var table_start_y = field_center_y - 80  # Center the table vertically
+	
+	# Create left side table for Team 0
+	var left_main_container = VBoxContainer.new()
+	left_main_container.name = "LeftStats"
+	panel.add_child(left_main_container)
+	left_main_container.position = Vector2(50, table_start_y - 40)  # Position headers above table (symmetric distance from field)
+	
+	# Headers for left side (S and E outside table)
+	var left_header_container = HBoxContainer.new()
+	left_main_container.add_child(left_header_container)
+	
+	var left_spacer = Control.new()
+	left_spacer.custom_minimum_size = Vector2(30, 25)
+	left_header_container.add_child(left_spacer)
+	
+	var left_s_header = Label.new()
+	left_s_header.text = "S"
+	left_s_header.add_theme_font_size_override("font_size", 18)
+	left_s_header.custom_minimum_size = Vector2(50, 25)
+	left_header_container.add_child(left_s_header)
+	
+	var left_e_header = Label.new()
+	left_e_header.text = "E"  
+	left_e_header.add_theme_font_size_override("font_size", 18)
+	left_e_header.custom_minimum_size = Vector2(50, 25)
+	left_header_container.add_child(left_e_header)
+	
+	# Create table container for Team 0 with background
+	var left_table = Panel.new()
+	left_table.name = "Team0Table"
+	left_main_container.add_child(left_table)
+	left_table.custom_minimum_size = Vector2(130, 170)
+	
+	# Add background color for Team 0 table
+	var left_stylebox = StyleBoxFlat.new()
+	left_stylebox.bg_color = Color(0.15, 0.25, 0.4, 0.8)  # Blue-ish background for Team 0
+	left_stylebox.border_width_left = 2
+	left_stylebox.border_width_right = 2
+	left_stylebox.border_width_top = 2
+	left_stylebox.border_width_bottom = 2
+	left_stylebox.border_color = Color.WHITE
+	left_table.add_theme_stylebox_override("panel", left_stylebox)
+	
+	# Create right side table for Team 1
+	var right_main_container = VBoxContainer.new()
+	right_main_container.name = "RightStats"
+	panel.add_child(right_main_container)
+	right_main_container.position = Vector2(1580, table_start_y - 40)  # Position headers above table
+	
+	# Headers for right side (S and E outside table)
+	var right_header_container = HBoxContainer.new()
+	right_main_container.add_child(right_header_container)
+	
+	var right_spacer = Control.new()
+	right_spacer.custom_minimum_size = Vector2(30, 25)
+	right_header_container.add_child(right_spacer)
+	
+	var right_s_header = Label.new()
+	right_s_header.text = "S"
+	right_s_header.add_theme_font_size_override("font_size", 18)
+	right_s_header.custom_minimum_size = Vector2(50, 25)
+	right_header_container.add_child(right_s_header)
+	
+	var right_e_header = Label.new()
+	right_e_header.text = "E"
+	right_e_header.add_theme_font_size_override("font_size", 18)
+	right_e_header.custom_minimum_size = Vector2(50, 25)
+	right_header_container.add_child(right_e_header)
+	
+	# Create table container for Team 1 with background
+	var right_table = Panel.new()
+	right_table.name = "Team1Table"
+	right_main_container.add_child(right_table)
+	right_table.custom_minimum_size = Vector2(130, 170)
+	
+	# Add background color for Team 1 table  
+	var right_stylebox = StyleBoxFlat.new()
+	right_stylebox.bg_color = Color(0.4, 0.15, 0.15, 0.8)  # Red-ish background for Team 1
+	right_stylebox.border_width_left = 2
+	right_stylebox.border_width_right = 2
+	right_stylebox.border_width_top = 2
+	right_stylebox.border_width_bottom = 2
+	right_stylebox.border_color = Color.WHITE
+	right_table.add_theme_stylebox_override("panel", right_stylebox)
+	
+	# Add table content for Team 0 (left side)
+	var left_grid = VBoxContainer.new()
+	left_table.add_child(left_grid)
+	left_grid.position = Vector2(5, 5)
+	
+	for i in range(players_per_team):
+		var left_row = HBoxContainer.new()
+		left_grid.add_child(left_row)
+		left_row.add_theme_constant_override("separation", 2)
+		
+		# Player number
+		var left_num = Label.new()
+		left_num.text = "%d" % (i + 1)
+		left_num.add_theme_font_size_override("font_size", 18)
+		left_num.add_theme_color_override("font_color", Color.WHITE)
+		left_num.custom_minimum_size = Vector2(25, 32)
+		left_num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		left_row.add_child(left_num)
+		
+		# Speed value
+		var ls_label = Label.new()
+		ls_label.name = "S_0_%d" % i
+		ls_label.text = "0"
+		ls_label.add_theme_font_size_override("font_size", 18)
+		ls_label.add_theme_color_override("font_color", Color.WHITE)
+		ls_label.custom_minimum_size = Vector2(45, 32)
+		ls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		left_row.add_child(ls_label)
+		
+		# Energy value
+		var le_label = Label.new()
+		le_label.name = "E_0_%d" % i
+		le_label.text = "0"
+		le_label.add_theme_font_size_override("font_size", 18)
+		le_label.add_theme_color_override("font_color", Color.WHITE)
+		le_label.custom_minimum_size = Vector2(45, 32)
+		le_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		left_row.add_child(le_label)
+	
+	# Add table content for Team 1 (right side)
+	var right_grid = VBoxContainer.new()
+	right_table.add_child(right_grid)
+	right_grid.position = Vector2(5, 5)
+	
+	for i in range(players_per_team):
+		var right_row = HBoxContainer.new()
+		right_grid.add_child(right_row)
+		right_row.add_theme_constant_override("separation", 2)
+		
+		# Player number
+		var right_num = Label.new()
+		right_num.text = "%d" % (i + 1)
+		right_num.add_theme_font_size_override("font_size", 18)
+		right_num.add_theme_color_override("font_color", Color.WHITE)
+		right_num.custom_minimum_size = Vector2(25, 32)
+		right_num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		right_row.add_child(right_num)
+		
+		# Speed value
+		var rs_label = Label.new()
+		rs_label.name = "S_1_%d" % i
+		rs_label.text = "0"
+		rs_label.add_theme_font_size_override("font_size", 18)
+		rs_label.add_theme_color_override("font_color", Color.WHITE)
+		rs_label.custom_minimum_size = Vector2(45, 32)
+		rs_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		right_row.add_child(rs_label)
+		
+		# Energy value
+		var re_label = Label.new()
+		re_label.name = "E_1_%d" % i
+		re_label.text = "0"
+		re_label.add_theme_font_size_override("font_size", 18)
+		re_label.add_theme_color_override("font_color", Color.WHITE)
+		re_label.custom_minimum_size = Vector2(45, 32)
+		re_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		right_row.add_child(re_label)
 
 
 func _build_hud_bars() -> void:
 	var panel = get_node_or_null(_panel_path)
 	if panel == null:
 		return
-	var hud_row := panel.get_node_or_null("HUDRow") as HBoxContainer
-	if hud_row == null:
-		return
-
-	for box_name in ["Team0Box", "Team1Box"]:
-		var old = hud_row.get_node_or_null(box_name)
-		if old:
-			old.queue_free()
-
-	var t0_box := VBoxContainer.new()
-	t0_box.name = "Team0Box"
-	hud_row.add_child(t0_box)
-	var t0_title := Label.new()
-	t0_title.text = "Team 0"
-	t0_box.add_child(t0_title)
-
-	var t1_box := VBoxContainer.new()
-	t1_box.name = "Team1Box"
-	hud_row.add_child(t1_box)
-	var t1_title := Label.new()
-	t1_title.text = "Team 1"
-	t1_box.add_child(t1_title)
-
-
-	for i: int in range(players_per_team):
-		_hud_add_player_row(t0_box, 0, i)
-		_hud_add_player_row(t1_box, 1, i)
-
-
+	
+	# Recreate side columns with fresh data
+	_create_side_columns(panel)
 	_update_hud()
 
 func _update_hud() -> void:
@@ -306,24 +411,29 @@ func _update_hud() -> void:
 		else:
 			turn_lb.text = "Turn: %d" % _turn
 
+	# Update side column labels with current player stats
 	var panel = get_node_or_null(_panel_path)
 	if panel == null:
 		return
-	var bar_map := {}
-	for n in panel.find_children("*", "ProgressBar", true, false):
-		bar_map[n.name] = n
+	
+	var label_map := {}
+	for n in panel.find_children("*", "Label", true, false):
+		label_map[n.name] = n
+	
 	var players := _get_players()
 	for p in players:
 		var t: int = int(p.team)
 		var i: int = int(p.player_id)
 		var ekey := "E_%d_%d" % [t, i]
 		var skey := "S_%d_%d" % [t, i]
-		if ekey in bar_map:
-			var ebar = bar_map[ekey]
-			ebar.value = (p.energy / max(p.max_energy, 1.0)) * 100.0
-		if skey in bar_map:
-			var sbar = bar_map[skey]
-			sbar.value = p.speed
+		
+		if ekey in label_map:
+			var elabel = label_map[ekey]
+			elabel.text = "%d" % int(p.energy)
+		
+		if skey in label_map:
+			var slabel = label_map[skey]
+			slabel.text = "%d" % int(p.speed)
 
 func _collect_state() -> Dictionary:
 	var players_arr := []

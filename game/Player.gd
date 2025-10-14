@@ -47,7 +47,7 @@ func set_texture(tex: Texture2D) -> void:
 	spr.offset = Vector2.ZERO
 
 func apply_move(displacement: Vector2) -> void:
-	var cost := displacement.length() * 0.1
+	var cost := displacement.length() * 0.05  # Reduced from 0.1 to 0.05 for smoother gameplay
 	energy = max(0.0, energy - cost)
 	global_position += displacement
 	# Update label position to stay centered
@@ -60,7 +60,7 @@ func _update_label_position() -> void:
 		label.position = Vector2(-6, -8)
 
 func regen(delta: float) -> void:
-	energy = min(max_energy, energy + 2.0 * delta)
+	energy = min(max_energy, energy + 3.0 * delta)  # Increased from 2.0 to 3.0 for better recovery
 
 func is_active() -> bool:
 	return energy > 1.0
