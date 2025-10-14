@@ -56,16 +56,20 @@ func _process(delta: float) -> void:
 	if not _defenders_alerted:
 		_check_for_defender_alert()
 	
-	# Get AI moves for all players - process every frame when defenders are alerted
+	# Get AI moves for all players - process every frame when defenders are alerted for immediate response
 	var state := _collect_state()
-	if _defenders_alerted or _frame_counter >= 2:  # Defenders move every frame, attacker every 2 frames
-		if _frame_counter >= 2:
-			_frame_counter = 0
+	
+	if _defenders_alerted:
+		# URGENT MODE: Process every frame for immediate attacker escape and defender chase
 		_process_ai_moves(state, players)
-		
-		# Check win conditions
 		_check_round_end_conditions()
-		
+		_turn += 1
+		_update_hud()
+	elif _frame_counter >= 2:
+		# NORMAL MODE: Process every 2 frames when no urgency
+		_frame_counter = 0
+		_process_ai_moves(state, players)
+		_check_round_end_conditions()
 		_turn += 1
 		_update_hud()
 
@@ -195,13 +199,23 @@ func _spawn_players() -> void:
 			p.energy = p.max_energy
 			p.speed = p.base_speed
 			
-			# Position players in their respective courts (team boxes)
+			# Position players randomly within their respective courts for fair gameplay
 			var y := _rng.randi_range(int(field_rect.position.y)+40, int(field_rect.position.y+field_rect.size.y)-40)
 			var x: float
+			
+			# Calculate court boundaries
+			var court_width: float = (center_x - field_rect.position.x)
+			var min_distance_from_center: float = 80.0  # Minimum distance from center line
+			var max_distance_from_center: float = court_width - 50.0  # Maximum distance (leave some border)
+			
 			if t == 0:  # Team 0 on left side
-				x = field_rect.position.x + 60 + i * 30  # Spread players in their court
+				# Random distance from center line within left court
+				var distance_from_center: float = _rng.randf_range(min_distance_from_center, max_distance_from_center)
+				x = center_x - distance_from_center
 			else:  # Team 1 on right side
-				x = center_x + 60 + i * 30  # Spread players in their court
+				# Random distance from center line within right court  
+				var distance_from_center: float = _rng.randf_range(min_distance_from_center, max_distance_from_center)
+				x = center_x + distance_from_center
 			
 			p.global_position = Vector2(x, y)
 			var color := Color(0.2,0.6,1.0,1.0) if t == 0 else Color(1.0,0.4,0.3,1.0)

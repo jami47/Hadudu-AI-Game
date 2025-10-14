@@ -200,43 +200,35 @@ static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: 
 			for scored_move in scored_moves:
 				moves.append(scored_move["move"])
 	else:
-		# URGENT ESCAPE MODE: Defenders are alerted, must return home immediately!
+		# IMMEDIATE ESCAPE MODE: Defenders are alerted, return home NOW!
 		var direction_to_home: Vector2
 		if team == 0:  # Team 0 wants to go left (towards smaller x)
 			direction_to_home = Vector2(-1, 0)
 		else:  # Team 1 wants to go right (towards larger x) 
 			direction_to_home = Vector2(1, 0)
 		
-		# Collect all defender positions for comprehensive evasion
-		var all_defenders: Array = []
-		for player in state["players"]:
-			if int(player.get("team", 0)) != team:  # This is a defender
-				var defender_pos := player.get("pos", Vector2.ZERO) as Vector2
-				all_defenders.append(defender_pos)
+		# Find the most direct escape routes first
+		var escape_moves: Array = []
+		var defensive_moves: Array = []
 		
-		var scored_moves: Array = []
 		for direction in dirs:
-			# MASSIVE priority for moves toward home court
-			var alignment_score := direction.normalized().dot(direction_to_home) * 100.0  # Increased from implicit 1.0
+			var alignment_with_home := direction.normalized().dot(direction_to_home)
 			
-			# Calculate total evasion bonus from ALL defenders
-			var new_pos := attacker_pos + direction
-			var total_evasion_bonus := 0.0
-			
-			for defender_pos in all_defenders:
-				var current_dist := attacker_pos.distance_to(defender_pos)
-				var new_dist := new_pos.distance_to(defender_pos)
-				if new_dist > current_dist:
-					total_evasion_bonus += 2.0  # Increased evasion bonus per defender
-				else:
-					total_evasion_bonus -= 5.0  # Heavy penalty for getting closer to any defender
-			
-			var final_score := alignment_score + total_evasion_bonus
-			scored_moves.append({"move": direction, "score": final_score})
+			if alignment_with_home > 0.5:  # Moves that go towards home (> 60 degree alignment)
+				escape_moves.append(direction)
+			else:
+				defensive_moves.append(direction)
 		
-		scored_moves.sort_custom(func(a, b): return a["score"] > b["score"])
-		for scored_move in scored_moves:
-			moves.append(scored_move["move"])
+		# Prioritize escape moves, then defensive moves as backup
+		for escape_direction in escape_moves:
+			moves.append(escape_direction)
+		
+		for defensive_direction in defensive_moves:
+			moves.append(defensive_direction)
+		
+		# If no good escape moves, force direct home movement
+		if escape_moves.is_empty():
+			moves.insert(0, direction_to_home.normalized() * step)
 	
 	return moves
 
