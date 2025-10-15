@@ -1,21 +1,18 @@
 extends Node
 class_name AI
 
-static func _directions(step: float) -> Array[Vector2]:
-	return [
-		Vector2.ZERO,
-		Vector2(step, 0), Vector2(-step, 0),
-		Vector2(0, step), Vector2(0, -step),
-		Vector2(step, step), Vector2(step, -step),
-		Vector2(-step, step), Vector2(-step, -step),
-	]
+# ============================================================================
+# BLUE TEAM AI IMPLEMENTATION (Heuristic-based AI)
+# ============================================================================
+# This section contains the heuristic AI logic for Blue Team (Team 0)
+# Developed using minimax with alpha-beta pruning and strategic heuristics
 
-# Get move for attacking player (raider)
-static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
+# Blue Team: Get move for attacking player (raider)
+static func blue_team_get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
 	var alpha: float = -INF
 	var beta: float = INF
 	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
-	var moves := _generate_attacker_moves(state, team, attacker_id, step_size, defenders_alerted)
+	var moves := _blue_generate_attacker_moves(state, team, attacker_id, step_size, defenders_alerted)
 	
 	if moves.is_empty():
 		# Fallback: return a basic move towards opponent court
@@ -23,8 +20,8 @@ static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, de
 		return {"delta": basic_move, "score": 0.0}
 	
 	for move in moves:
-		var new_state := _apply_attacker_move(state, team, attacker_id, move)
-		var score := _min_value_attacker(new_state, team, depth - 1, alpha, beta, step_size, defenders_alerted)
+		var new_state := _blue_apply_attacker_move(state, team, attacker_id, move)
+		var score := _blue_min_value_attacker(new_state, team, depth - 1, alpha, beta, step_size, defenders_alerted)
 		if score > best["score"]:
 			best = {"delta": move, "score": score}
 		alpha = max(alpha, score)
@@ -40,12 +37,12 @@ static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, de
 	
 	return best
 
-# Get move for defending player
-static func get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
+# Blue Team: Get move for defending player
+static func blue_team_get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
 	var alpha: float = -INF
 	var beta: float = INF
 	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
-	var moves := _generate_defender_moves(state, team, defender_id, step_size, attacker_pos)
+	var moves := _blue_generate_defender_moves(state, team, defender_id, step_size, attacker_pos)
 	
 	if moves.is_empty():
 		# Fallback: move directly towards attacker
@@ -58,8 +55,8 @@ static func get_defender_move(state: Dictionary, team: int, defender_id: int, de
 		return {"delta": direction, "score": 0.0}
 	
 	for move in moves:
-		var new_state := _apply_defender_move(state, team, defender_id, move)
-		var score := _min_value_defender(new_state, team, depth - 1, alpha, beta, step_size, attacker_pos)
+		var new_state := _blue_apply_defender_move(state, team, defender_id, move)
+		var score := _blue_min_value_defender(new_state, team, depth - 1, alpha, beta, step_size, attacker_pos)
 		if score > best["score"]:
 			best = {"delta": move, "score": score}
 		alpha = max(alpha, score)
@@ -75,65 +72,62 @@ static func get_defender_move(state: Dictionary, team: int, defender_id: int, de
 	
 	return best
 
-# Minimax for attacker (trying to maximize score)
-static func _max_value_attacker(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, defenders_alerted: bool) -> float:
+# Blue Team: Minimax for attacker (trying to maximize score)
+static func _blue_max_value_attacker(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, defenders_alerted: bool) -> float:
 	if depth <= 0:
-		return _attacker_heuristic(state, team, defenders_alerted)
+		return _blue_attacker_heuristic(state, team, defenders_alerted)
 	var v := -INF
-	var moves := _generate_attacker_moves(state, team, 0, step, defenders_alerted)  # Assuming attacker_id is tracked in state
+	var moves := _blue_generate_attacker_moves(state, team, 0, step, defenders_alerted)  # Assuming attacker_id is tracked in state
 	for move in moves:
-		var new_state := _apply_attacker_move(state, team, 0, move)
-		v = max(v, _min_value_attacker(new_state, team, depth - 1, alpha, beta, step, defenders_alerted))
+		var new_state := _blue_apply_attacker_move(state, team, 0, move)
+		v = max(v, _blue_min_value_attacker(new_state, team, depth - 1, alpha, beta, step, defenders_alerted))
 		if v >= beta:
 			return v
 		alpha = max(alpha, v)
 	return v
 
-static func _min_value_attacker(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, defenders_alerted: bool) -> float:
+static func _blue_min_value_attacker(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, defenders_alerted: bool) -> float:
 	if depth <= 0:
-		return _attacker_heuristic(state, team, defenders_alerted)
+		return _blue_attacker_heuristic(state, team, defenders_alerted)
 	var v := INF
-	var moves := _generate_attacker_moves(state, team, 0, step, defenders_alerted)
+	var moves := _blue_generate_attacker_moves(state, team, 0, step, defenders_alerted)
 	for move in moves:
-		var new_state := _apply_attacker_move(state, team, 0, move)
-		v = min(v, _max_value_attacker(new_state, team, depth - 1, alpha, beta, step, defenders_alerted))
+		var new_state := _blue_apply_attacker_move(state, team, 0, move)
+		v = min(v, _blue_max_value_attacker(new_state, team, depth - 1, alpha, beta, step, defenders_alerted))
 		if v <= alpha:
 			return v
 		beta = min(beta, v)
 	return v
 
-# Minimax for defender (trying to maximize chance of catching attacker)
-static func _max_value_defender(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, attacker_pos: Vector2) -> float:
+# Blue Team: Minimax for defender (trying to maximize chance of catching attacker)
+static func _blue_max_value_defender(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, attacker_pos: Vector2) -> float:
 	if depth <= 0:
-		return _defender_heuristic(state, team, attacker_pos)
+		return _blue_defender_heuristic(state, team, attacker_pos)
 	var v := -INF
-	var moves := _generate_defender_moves(state, team, 0, step, attacker_pos)
+	var moves := _blue_generate_defender_moves(state, team, 0, step, attacker_pos)
 	for move in moves:
-		var new_state := _apply_defender_move(state, team, 0, move)
-		v = max(v, _min_value_defender(new_state, team, depth - 1, alpha, beta, step, attacker_pos))
+		var new_state := _blue_apply_defender_move(state, team, 0, move)
+		v = max(v, _blue_min_value_defender(new_state, team, depth - 1, alpha, beta, step, attacker_pos))
 		if v >= beta:
 			return v
 		alpha = max(alpha, v)
 	return v
 
-static func _min_value_defender(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, attacker_pos: Vector2) -> float:
+static func _blue_min_value_defender(state: Dictionary, team: int, depth: int, alpha: float, beta: float, step: float, attacker_pos: Vector2) -> float:
 	if depth <= 0:
-		return _defender_heuristic(state, team, attacker_pos)
+		return _blue_defender_heuristic(state, team, attacker_pos)
 	var v := INF
-	var moves := _generate_defender_moves(state, team, 0, step, attacker_pos)
+	var moves := _blue_generate_defender_moves(state, team, 0, step, attacker_pos)
 	for move in moves:
-		var new_state := _apply_defender_move(state, team, 0, move)
-		v = min(v, _max_value_defender(new_state, team, depth - 1, alpha, beta, step, attacker_pos))
+		var new_state := _blue_apply_defender_move(state, team, 0, move)
+		v = min(v, _blue_max_value_defender(new_state, team, depth - 1, alpha, beta, step, attacker_pos))
 		if v <= alpha:
 			return v
 		beta = min(beta, v)
 	return v
 
-static func _opponent(t: int) -> int:
-	return 1 - (t & 1)
-
-# Generate moves for attacker
-static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: int, step: float, defenders_alerted: bool) -> Array[Vector2]:
+# Blue Team: Generate moves for attacker
+static func _blue_generate_attacker_moves(state: Dictionary, team: int, attacker_id: int, step: float, defenders_alerted: bool) -> Array[Vector2]:
 	var moves: Array[Vector2] = []
 	
 	# Find attacker's current position
@@ -255,8 +249,8 @@ static func _generate_attacker_moves(state: Dictionary, team: int, attacker_id: 
 	
 	return moves
 
-# Generate moves for defender  
-static func _generate_defender_moves(state: Dictionary, team: int, defender_id: int, step: float, attacker_pos: Vector2) -> Array[Vector2]:
+# Blue Team: Generate moves for defender  
+static func _blue_generate_defender_moves(state: Dictionary, team: int, defender_id: int, step: float, attacker_pos: Vector2) -> Array[Vector2]:
 	var moves: Array[Vector2] = []
 	
 	# Find defender's current position
@@ -287,7 +281,8 @@ static func _generate_defender_moves(state: Dictionary, team: int, defender_id: 
 	
 	return moves
 
-static func _apply_attacker_move(state: Dictionary, team: int, attacker_id: int, move: Vector2) -> Dictionary:
+# Blue Team: Apply attacker move to state
+static func _blue_apply_attacker_move(state: Dictionary, team: int, attacker_id: int, move: Vector2) -> Dictionary:
 	var new_state := {"players": []}
 	for i in range(state["players"].size()):
 		var p: Dictionary = state["players"][i].duplicate()
@@ -298,7 +293,8 @@ static func _apply_attacker_move(state: Dictionary, team: int, attacker_id: int,
 		new_state["players"].append(p)
 	return new_state
 
-static func _apply_defender_move(state: Dictionary, team: int, defender_id: int, move: Vector2) -> Dictionary:
+# Blue Team: Apply defender move to state
+static func _blue_apply_defender_move(state: Dictionary, team: int, defender_id: int, move: Vector2) -> Dictionary:
 	var new_state := {"players": []}
 	for i in range(state["players"].size()):
 		var p: Dictionary = state["players"][i].duplicate()
@@ -309,8 +305,8 @@ static func _apply_defender_move(state: Dictionary, team: int, defender_id: int,
 		new_state["players"].append(p)
 	return new_state
 
-# Heuristic for attacker - MUST engage defenders before trying to return
-static func _attacker_heuristic(state: Dictionary, team: int, defenders_alerted: bool) -> float:
+# Blue Team: Heuristic for attacker - MUST engage defenders before trying to return
+static func _blue_attacker_heuristic(state: Dictionary, team: int, defenders_alerted: bool) -> float:
 	var players: Array = state["players"]
 	if players.is_empty():
 		return 0.0
@@ -437,8 +433,8 @@ static func _attacker_heuristic(state: Dictionary, team: int, defenders_alerted:
 	
 	return score
 
-# Heuristic for defender - wants to catch the attacker
-static func _defender_heuristic(state: Dictionary, team: int, attacker_pos: Vector2) -> float:
+# Blue Team: Heuristic for defender - wants to catch the attacker
+static func _blue_defender_heuristic(state: Dictionary, team: int, attacker_pos: Vector2) -> float:
 	var players: Array = state["players"]
 	if players.is_empty():
 		return 0.0
@@ -479,6 +475,75 @@ static func _defender_heuristic(state: Dictionary, team: int, attacker_pos: Vect
 	score += randf_range(-1.0, 1.0)
 	
 	return score
+
+# ============================================================================
+# RED TEAM AI IMPLEMENTATION (Your Friend's Work)
+# ============================================================================
+# TODO: Your friend should implement their own AI logic here
+# Currently using Blue Team logic as placeholder
+
+# Red Team: Get move for attacking player (raider)
+# TODO: Replace this with your friend's implementation
+static func red_team_get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
+	# PLACEHOLDER: Using Blue Team logic
+	# Your friend should replace this function with their own AI implementation
+	return blue_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
+
+# Red Team: Get move for defending player
+# TODO: Replace this with your friend's implementation
+static func red_team_get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
+	# PLACEHOLDER: Using Blue Team logic
+	# Your friend should replace this function with their own AI implementation
+	return blue_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
+
+# ============================================================================
+# PUBLIC API - MAIN ENTRY POINTS
+# ============================================================================
+# These functions route to the correct team's AI implementation
+
+# Main function to get attacker move based on team
+# Call this from Game.gd with the appropriate team (0 = Blue, 1 = Red)
+static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
+	if team == 0:
+		# Blue Team (Team 0) - Uses heuristic AI
+		return blue_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
+	elif team == 1:
+		# Red Team (Team 1) - Currently using placeholder (Blue Team logic)
+		return red_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
+	else:
+		push_error("Invalid team: " + str(team))
+		return {"delta": Vector2.ZERO, "score": 0.0}
+
+# Main function to get defender move based on team
+# Call this from Game.gd with the appropriate team (0 = Blue, 1 = Red)
+static func get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
+	if team == 0:
+		# Blue Team (Team 0) - Uses heuristic AI
+		return blue_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
+	elif team == 1:
+		# Red Team (Team 1) - Currently using placeholder (Blue Team logic)
+		return red_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
+	else:
+		push_error("Invalid team: " + str(team))
+		return {"delta": Vector2.ZERO, "score": 0.0}
+
+# ============================================================================
+# SHARED UTILITY FUNCTIONS (Used by both teams)
+# ============================================================================
+
+# Helper function to get opponent team
+static func _opponent(t: int) -> int:
+	return 1 - (t & 1)
+
+# Helper function to generate direction vectors
+static func _directions(step: float) -> Array[Vector2]:
+	return [
+		Vector2.ZERO,
+		Vector2(step, 0), Vector2(-step, 0),
+		Vector2(0, step), Vector2(0, -step),
+		Vector2(step, step), Vector2(step, -step),
+		Vector2(-step, step), Vector2(-step, -step),
+	]
 
 static func _nearest_opponent_distance(players: Array, me: Dictionary) -> float:
 	var best := INF
