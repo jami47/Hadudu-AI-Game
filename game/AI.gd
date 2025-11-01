@@ -477,24 +477,75 @@ static func _blue_defender_heuristic(state: Dictionary, team: int, attacker_pos:
 	return score
 
 # ============================================================================
-# RED TEAM AI IMPLEMENTATION (Your Friend's Work)
+# RED TEAM AI IMPLEMENTATION
 # ============================================================================
-# TODO: Your friend should implement their own AI logic here
-# Currently using Blue Team logic as placeholder
+# Red Team uses a more aggressive and risk-taking strategy compared to Blue Team
+# Implementation delegated to RedTeamAI helper class for better organization
 
-# Red Team: Get move for attacking player (raider)
-# TODO: Replace this with your friend's implementation
+# Red Team: Get move for attacking player (raider) - More aggressive strategy
 static func red_team_get_attacker_move(state: Dictionary, team: int, attacker_id: int, depth: int, step_size: float, defenders_alerted: bool) -> Dictionary:
-	# PLACEHOLDER: Using Blue Team logic
-	# Your friend should replace this function with their own AI implementation
-	return blue_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
+	var alpha: float = -INF
+	var beta: float = INF
+	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
+	var moves := RedTeamAI.generate_attacker_moves(state, team, attacker_id, step_size, defenders_alerted)
+	
+	if moves.is_empty():
+		# Fallback: aggressive move towards opponent court
+		var basic_move := Vector2(step_size * 1.2, 0) if team == 0 else Vector2(-step_size * 1.2, 0)
+		return {"delta": basic_move, "score": 0.0}
+	
+	for move in moves:
+		var new_state := RedTeamAI.apply_attacker_move(state, team, attacker_id, move)
+		var score := RedTeamAI.min_value_attacker(new_state, team, depth - 1, alpha, beta, step_size, defenders_alerted)
+		if score > best["score"]:
+			best = {"delta": move, "score": score}
+		alpha = max(alpha, score)
+		if beta <= alpha:
+			break
+	
+	# If all moves have negative infinity score, pick the most aggressive move
+	if best["score"] == -INF and moves.size() > 1:
+		for move in moves:
+			if move.length() > 0:
+				best = {"delta": move, "score": 0.0}
+				break
+	
+	return best
 
-# Red Team: Get move for defending player
-# TODO: Replace this with your friend's implementation
+# Red Team: Get move for defending player - More coordinated defense
 static func red_team_get_defender_move(state: Dictionary, team: int, defender_id: int, depth: int, step_size: float, attacker_pos: Vector2) -> Dictionary:
-	# PLACEHOLDER: Using Blue Team logic
-	# Your friend should replace this function with their own AI implementation
-	return blue_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
+	var alpha: float = -INF
+	var beta: float = INF
+	var best: Dictionary = {"delta": Vector2.ZERO, "score": -INF}
+	var moves := RedTeamAI.generate_defender_moves(state, team, defender_id, step_size, attacker_pos)
+	
+	if moves.is_empty():
+		# Fallback: aggressive pursuit of attacker
+		var defender_pos: Vector2 = Vector2.ZERO
+		for player in state["players"]:
+			if int(player.get("team", 0)) == team and int(player.get("id", 0)) == defender_id:
+				defender_pos = player.get("pos", Vector2.ZERO) as Vector2
+				break
+		var direction := (attacker_pos - defender_pos).normalized() * step_size * 1.1  # Slightly faster
+		return {"delta": direction, "score": 0.0}
+	
+	for move in moves:
+		var new_state := RedTeamAI.apply_defender_move(state, team, defender_id, move)
+		var score := RedTeamAI.min_value_defender(new_state, team, depth - 1, alpha, beta, step_size, attacker_pos)
+		if score > best["score"]:
+			best = {"delta": move, "score": score}
+		alpha = max(alpha, score)
+		if beta <= alpha:
+			break
+	
+	# If all moves have negative infinity score, pick the most direct move
+	if best["score"] == -INF and moves.size() > 1:
+		for move in moves:
+			if move.length() > 0:
+				best = {"delta": move, "score": 0.0}
+				break
+	
+	return best
 
 # ============================================================================
 # PUBLIC API - MAIN ENTRY POINTS
@@ -508,7 +559,7 @@ static func get_attacker_move(state: Dictionary, team: int, attacker_id: int, de
 		# Blue Team (Team 0) - Uses heuristic AI
 		return blue_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
 	elif team == 1:
-		# Red Team (Team 1) - Currently using placeholder (Blue Team logic)
+		# Red Team (Team 1) - Uses aggressive AI with risk-taking strategy
 		return red_team_get_attacker_move(state, team, attacker_id, depth, step_size, defenders_alerted)
 	else:
 		push_error("Invalid team: " + str(team))
@@ -521,7 +572,7 @@ static func get_defender_move(state: Dictionary, team: int, defender_id: int, de
 		# Blue Team (Team 0) - Uses heuristic AI
 		return blue_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
 	elif team == 1:
-		# Red Team (Team 1) - Currently using placeholder (Blue Team logic)
+		# Red Team (Team 1) - Uses coordinated defense with interception
 		return red_team_get_defender_move(state, team, defender_id, depth, step_size, attacker_pos)
 	else:
 		push_error("Invalid team: " + str(team))
