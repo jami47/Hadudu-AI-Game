@@ -679,48 +679,63 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 
 # Detect if attacker is stuck circling (stalemate) and force resolution
 func _check_stalemate() -> void:
-	if not _defenders_alerted:
-		# Reset stalemate detection when defenders not alerted
-		_attacker_progress_timer = 0
-		return
-	
 	var players := _get_players()
 	var attacker := _get_attacker(players)
 	if attacker == null:
 		return
 	
 	var attacker_pos := attacker.global_position
+	var center_x := field_rect.position.x + field_rect.size.x * 0.5
+	
+	# Check if attacker is in opponent's court
+	var in_opponent_court := false
+	if _attacking_team == 0:  # Team 0 attacking right
+		in_opponent_court = attacker_pos.x > center_x
+	else:  # Team 1 attacking left
+		in_opponent_court = attacker_pos.x < center_x
+	
+	# Only track progress when attacker is in opponent's court
+	if not in_opponent_court:
+		_attacker_progress_timer = 0
+		_attacker_last_progress_check_pos = Vector2.ZERO
+		return
+	
 	_attacker_progress_timer += 1
+	
+	# Initialize tracking position when entering opponent court
+	if _attacker_progress_timer == 1:
+		_attacker_last_progress_check_pos = attacker_pos
+		return
 	
 	# Check progress every stalemate_timeout frames
 	if _attacker_progress_timer >= stalemate_timeout:
 		var distance_traveled := attacker_pos.distance_to(_attacker_last_progress_check_pos)
 		
 		if distance_traveled < _min_progress_distance:
-			# Attacker is circling/stuck - force resolution
-			# Find closest defender and award point to defending team
-			var defenders := _get_defenders(players)
-			var closest_defender = null
-			var min_distance := INF
-			
-			for defender in defenders:
-				var dist := attacker_pos.distance_to(defender.global_position)
-				if dist < min_distance:
-					min_distance = dist
-					closest_defender = defender
-			
-			if closest_defender:
-				_award_point(_defending_team, "Attacker stuck/circling - caught by Player %d" % (closest_defender.player_id + 1))
+			# Attacker is circling/stuck without making meaningful progress
+			if _defenders_alerted:
+				# Defenders are chasing - attacker caught
+				var defenders := _get_defenders(players)
+				var closest_defender = null
+				var min_distance := INF
+				
+				for defender in defenders:
+					var dist := attacker_pos.distance_to(defender.global_position)
+					if dist < min_distance:
+						min_distance = dist
+						closest_defender = defender
+				
+				if closest_defender:
+					_award_point(_defending_team, "Attacker stuck/circling - caught by Player %d" % (closest_defender.player_id + 1))
+				else:
+					_award_point(_defending_team, "Attacker unable to make progress")
 			else:
-				_award_point(_defending_team, "Attacker unable to make progress")
+				# Defenders not yet alerted - attacker failed to engage properly
+				_award_point(_defending_team, "Attacker failed to make progress in opponent court")
 		
 		# Reset progress tracking
 		_attacker_last_progress_check_pos = attacker_pos
 		_attacker_progress_timer = 0
-	
-	# Initialize tracking position on first alert
-	if _attacker_progress_timer == 1:
-		_attacker_last_progress_check_pos = attacker_pos
 
 func _check_round_end_conditions() -> void:
 	var players := _get_players()
