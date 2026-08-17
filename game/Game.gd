@@ -2,9 +2,12 @@ extends Node2D
 
 @export var players_per_team: int = 5
 @export var move_distance: float = 8.0
-@export var ai_depth: int = 1  # Reduced depth for faster, more responsive AI
+@export var ai_depth: int = 3  # Minimax depth for adversarial search (both attackers and defenders)
+@export var ai_update_interval: int = 15  # Frames between AI recalculations (higher = smoother movement)
+@export var movement_smoothing: float = 0.2  # Interpolation factor for smooth direction changes (0-1)
 @export var close_range_threshold: float = 35.0  # Distance for "very close" range (increased)
 @export var catch_distance: float = 12.0  # Distance for catching the attacker (decreased)
+@export var stalemate_timeout: int = 180  # Frames without progress before forcing resolution (3 seconds at 60fps)
 
 @export var energy_min: float = 60.0
 @export var energy_max: float = 100.0
@@ -27,6 +30,15 @@ var _defending_team: int = 1  # 1 or 0
 var _attacker_index: int = 0  # Which player from attacking team is the raider
 var _defenders_alerted: bool = false  # Whether defenders are rushing to catch attacker
 var _team_scores: Array[int] = [0, 0]
+
+# Smooth movement system - stores velocities instead of directions
+var _player_velocities: Dictionary = {}  # Key: "team_id", Value: Vector2 velocity
+var _player_target_velocities: Dictionary = {}  # Key: "team_id", Value: Vector2 target velocity from AI
+
+# Stalemate detection - prevents infinite circling
+var _attacker_last_progress_check_pos: Vector2 = Vector2.ZERO
+var _attacker_progress_timer: int = 0
+var _min_progress_distance: float = 50.0  # Must move at least this far every stalemate_timeout frames
 
 var _panel_path := "UI/Panel"
 var _button_path := "UI/Panel/StartButton"
@@ -59,22 +71,24 @@ func _process(delta: float) -> void:
 	if not _defenders_alerted:
 		_check_for_defender_alert()
 	
-	# Get AI moves for all players - process every frame when defenders are alerted for immediate response
+	# AI decision-making happens every ai_update_interval frames
+	# Players continue moving in their last decided direction between AI updates
 	var state := _collect_state()
 	
-	if _defenders_alerted:
-		# URGENT MODE: Process every frame for immediate attacker escape and defender chase
-		_process_ai_moves(state, players)
-		_check_round_end_conditions()
-		_turn += 1
-		_update_hud()
-	elif _frame_counter >= 2:
-		# NORMAL MODE: Process every 2 frames when no urgency
+	if _frame_counter >= ai_update_interval:
 		_frame_counter = 0
-		_process_ai_moves(state, players)
-		_check_round_end_conditions()
+		# Recalculate AI decisions using minimax (adversarial search)
+		_update_ai_decisions(state, players)
 		_turn += 1
 		_update_hud()
+	
+	# Apply smooth interpolated movement every frame
+	_apply_smooth_movement(players)
+	
+	# Check for stalemate (attacker circling without progress)
+	_check_stalemate()
+	
+	_check_round_end_conditions()
 
 func _ensure_ui() -> void:
 	var ui = get_node_or_null("UI")
@@ -500,6 +514,14 @@ func _start_new_round() -> void:
 	_defenders_alerted = false
 	_attacker_index = _rng.randi() % players_per_team  # Random attacker from attacking team
 	
+	# Clear movement data for new round
+	_player_velocities.clear()
+	_player_target_velocities.clear()
+	
+	# Reset stalemate detection
+	_attacker_progress_timer = 0
+	_attacker_last_progress_check_pos = Vector2.ZERO
+	
 	# Respawn all players in new random positions
 	_clear_players()
 	_spawn_players()
@@ -527,38 +549,95 @@ func _check_for_defender_alert() -> void:
 			print("[Game] Defenders alerted! Attacker got within range of Player %d" % (defender.player_id + 1))
 			break
 
-func _process_ai_moves(state: Dictionary, players: Array) -> void:
-	# Process attacker move - only the designated attacker should move initially
+# Update AI decisions using minimax adversarial search (called every ai_update_interval frames)
+func _update_ai_decisions(state: Dictionary, players: Array) -> void:
 	var attacker := _get_attacker(players)
+	var center_x := field_rect.position.x + field_rect.size.x * 0.5
+	
+	# Update attacker's target velocity using minimax with depth=ai_depth
 	if attacker != null:
 		var attacker_move := AI.get_attacker_move(state, _attacking_team, _attacker_index, ai_depth, move_distance, _defenders_alerted)
-		if attacker_move["delta"] != Vector2.ZERO:
-			_apply_player_move(attacker, attacker_move)
-		else:
-			# Force attacker to move towards opponent court if AI returns zero movement
-			var forced_move := {"delta": Vector2(move_distance, 0) if _attacking_team == 0 else Vector2(-move_distance, 0)}
-			_apply_player_move(attacker, forced_move)
-			print("[Game] Forced attacker movement to prevent standstill")
-	
-	# Process defender moves (only if alerted and only defending team players)
-	if _defenders_alerted:
-		var defenders := _get_defenders(players)
-		var attacker_pos := attacker.global_position if attacker else Vector2.ZERO
+		var attacker_key := "%d_%d" % [_attacking_team, _attacker_index]
 		
-		# All defenders chase the attacker when alerted
+		if attacker_move["delta"] != Vector2.ZERO:
+			# Set target velocity from AI decision
+			_player_target_velocities[attacker_key] = attacker_move["delta"].normalized() * move_distance
+		else:
+			# Fallback: move toward opponent court
+			var fallback_dir := Vector2(1, 0) if _attacking_team == 0 else Vector2(-1, 0)
+			_player_target_velocities[attacker_key] = fallback_dir * move_distance
+	
+	# Update defenders' target velocities (only if alerted)
+	if _defenders_alerted and attacker != null:
+		var defenders := _get_defenders(players)
+		var attacker_pos := attacker.global_position
 		
 		for defender in defenders:
-			# Ensure all defenders move towards attacker with simplified direct approach
-			var direction_to_attacker: Vector2 = (attacker_pos - defender.global_position).normalized()
-			var distance_to_attacker: float = defender.global_position.distance_to(attacker_pos)
+			var defender_key := "%d_%d" % [_defending_team, defender.player_id]
+			var defender_pos: Vector2 = defender.global_position
 			
-			# Use direct movement for more predictable chasing behavior
-			if distance_to_attacker > 5.0:  # Only move if not too close
-				var chase_move := {"delta": direction_to_attacker * move_distance}
-				_apply_player_move(defender, chase_move)
+			# Calculate base direction toward attacker
+			var base_chase_dir: Vector2 = (attacker_pos - defender_pos).normalized()
+			
+			# Use minimax to get AI suggestion
+			var defender_move := AI.get_defender_move(state, _defending_team, defender.player_id, ai_depth, move_distance, attacker_pos)
+			
+			if defender_move["delta"] != Vector2.ZERO:
+				var ai_suggested_dir: Vector2 = defender_move["delta"].normalized()
+				
+				# CRITICAL FIX: Only use AI suggestion if it's moving TOWARD the attacker
+				# Check if AI direction has positive dot product with chase direction
+				var dot_product: float = ai_suggested_dir.dot(base_chase_dir)
+				
+				if dot_product > 0.3:  # AI direction is reasonably toward attacker (angle < 72 degrees)
+					# Use AI's smart interception path
+					_player_target_velocities[defender_key] = ai_suggested_dir * move_distance
+				else:
+					# AI suggested going away from attacker - ignore it and chase directly
+					_player_target_velocities[defender_key] = base_chase_dir * move_distance
+			else:
+				# Fallback to direct chase
+				_player_target_velocities[defender_key] = base_chase_dir * move_distance
+
+# Apply smooth interpolated movement every frame to prevent oscillation
+func _apply_smooth_movement(players: Array) -> void:
+	var attacker := _get_attacker(players)
 	
-	# All other players (non-attacking team members and non-designated attacker) should not move
-	# They'll stay in place due to the restriction system
+	# Smoothly move attacker toward target velocity
+	if attacker != null:
+		var attacker_key := "%d_%d" % [_attacking_team, _attacker_index]
+		if attacker_key in _player_target_velocities:
+			# Initialize current velocity if not exists
+			if attacker_key not in _player_velocities:
+				_player_velocities[attacker_key] = Vector2.ZERO
+			
+			# Interpolate current velocity toward target velocity (smooth acceleration)
+			var current_vel: Vector2 = _player_velocities[attacker_key]
+			var target_vel: Vector2 = _player_target_velocities[attacker_key]
+			var new_vel: Vector2 = current_vel.lerp(target_vel, movement_smoothing)
+			_player_velocities[attacker_key] = new_vel
+			
+			# Apply the smooth velocity
+			_apply_player_move(attacker, {"delta": new_vel})
+	
+	# Smoothly move defenders toward their target velocities (only if alerted)
+	if _defenders_alerted:
+		var defenders := _get_defenders(players)
+		for defender in defenders:
+			var defender_key := "%d_%d" % [_defending_team, defender.player_id]
+			if defender_key in _player_target_velocities:
+				# Initialize current velocity if not exists
+				if defender_key not in _player_velocities:
+					_player_velocities[defender_key] = Vector2.ZERO
+				
+				# Interpolate current velocity toward target velocity (smooth acceleration)
+				var current_vel: Vector2 = _player_velocities[defender_key]
+				var target_vel: Vector2 = _player_target_velocities[defender_key]
+				var new_vel: Vector2 = current_vel.lerp(target_vel, movement_smoothing)
+				_player_velocities[defender_key] = new_vel
+				
+				# Apply the smooth velocity
+				_apply_player_move(defender, {"delta": new_vel})
 
 func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 	if move.has("delta") and move["delta"] != Vector2.ZERO:
@@ -597,6 +676,66 @@ func _apply_player_move(player: Node2D, move: Dictionary) -> void:
 		
 		player.apply_move(final_displacement)
 		_clamp_to_field_with_restrictions(player)
+
+# Detect if attacker is stuck circling (stalemate) and force resolution
+func _check_stalemate() -> void:
+	var players := _get_players()
+	var attacker := _get_attacker(players)
+	if attacker == null:
+		return
+	
+	var attacker_pos := attacker.global_position
+	var center_x := field_rect.position.x + field_rect.size.x * 0.5
+	
+	# Check if attacker is in opponent's court
+	var in_opponent_court := false
+	if _attacking_team == 0:  # Team 0 attacking right
+		in_opponent_court = attacker_pos.x > center_x
+	else:  # Team 1 attacking left
+		in_opponent_court = attacker_pos.x < center_x
+	
+	# Only track progress when attacker is in opponent's court
+	if not in_opponent_court:
+		_attacker_progress_timer = 0
+		_attacker_last_progress_check_pos = Vector2.ZERO
+		return
+	
+	_attacker_progress_timer += 1
+	
+	# Initialize tracking position when entering opponent court
+	if _attacker_progress_timer == 1:
+		_attacker_last_progress_check_pos = attacker_pos
+		return
+	
+	# Check progress every stalemate_timeout frames
+	if _attacker_progress_timer >= stalemate_timeout:
+		var distance_traveled := attacker_pos.distance_to(_attacker_last_progress_check_pos)
+		
+		if distance_traveled < _min_progress_distance:
+			# Attacker is circling/stuck without making meaningful progress
+			if _defenders_alerted:
+				# Defenders are chasing - attacker caught
+				var defenders := _get_defenders(players)
+				var closest_defender = null
+				var min_distance := INF
+				
+				for defender in defenders:
+					var dist := attacker_pos.distance_to(defender.global_position)
+					if dist < min_distance:
+						min_distance = dist
+						closest_defender = defender
+				
+				if closest_defender:
+					_award_point(_defending_team, "Attacker stuck/circling - caught by Player %d" % (closest_defender.player_id + 1))
+				else:
+					_award_point(_defending_team, "Attacker unable to make progress")
+			else:
+				# Defenders not yet alerted - attacker failed to engage properly
+				_award_point(_defending_team, "Attacker failed to make progress in opponent court")
+		
+		# Reset progress tracking
+		_attacker_last_progress_check_pos = attacker_pos
+		_attacker_progress_timer = 0
 
 func _check_round_end_conditions() -> void:
 	var players := _get_players()
